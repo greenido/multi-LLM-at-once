@@ -48,7 +48,7 @@ app.post('/set-context', (req, res) => {
 //
 app.post('/query', async (req, res) => {
   let query = req.body.query;
-  query = "context: " + context + " " + query
+  query = "context: " + context + ". " + query
   console.log('☀️ Query:', query);
   try {
     const ollama = new Ollama({
@@ -71,7 +71,7 @@ app.post('/query', async (req, res) => {
 //
 app.post('/query2', async (req, res) => {
   let query = req.body.query;
-  query = "context: " + context + " " + query
+  query = "context: " + context + ". " + query
   console.log('☀️ Query for mistral:', query);
   try {
     const ollama = new Ollama({
