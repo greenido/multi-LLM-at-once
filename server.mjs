@@ -1,7 +1,15 @@
+/**
+ * This is a simple Express server that serves a chat interface and uses the
+ * Ollama API to respond to user queries.
+ * @author @greenido
+ * @date 4-4-2024
+ * @see ollama.js and langchain.js
+ * 
+ */
 import { Ollama } from "@langchain/community/llms/ollama";
-
 import express from 'express';
-//import axios from ('axios');
+
+// Create an Express app
 const app = express();
 const port = 3000;
 
@@ -35,13 +43,14 @@ app.post('/set-context', (req, res) => {
   res.redirect('/');
 });
 
-// Route for handling user queries
+//
+// Route for handling user queries with the llama2 model
+//
 app.post('/query', async (req, res) => {
   let query = req.body.query;
   query = "context: " + context + " " + query
   console.log('☀️ Query:', query);
   try {
-    // Call the OpenAI API with the context and query
     const ollama = new Ollama({
       baseUrl: "http://localhost:11434",
       model: "llama2",
@@ -56,12 +65,15 @@ app.post('/query', async (req, res) => {
   }
 });
 
+
+//
+// Route for handling user queries with the mistral model
+//
 app.post('/query2', async (req, res) => {
   let query = req.body.query;
   query = "context: " + context + " " + query
   console.log('☀️ Query for mistral:', query);
   try {
-    // Call the OpenAI API with the context and query
     const ollama = new Ollama({
       baseUrl: "http://localhost:11434",
       model: "mistral",
@@ -77,8 +89,8 @@ app.post('/query2', async (req, res) => {
 });
 
 //
-// Start the server
+// 🥥 Start the server
 //
 app.listen(port, () => {
-  console.log(`Server is running on http://localhost:${port}`);
+  console.log(`🥥 Server running at: http://localhost:${port}`);
 });

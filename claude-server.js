@@ -1,3 +1,7 @@
+/**
+ * This is a simple Express server that serves a chat interface and interacts 
+ * with the Claude AI API.
+ */
 const express = require('express');
 const axios = require('axios');
 const path = require('path');

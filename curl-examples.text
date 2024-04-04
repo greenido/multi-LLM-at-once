@@ -1,3 +1,6 @@
+//
+//
+//
 curl https://api.openai.com/v1/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer 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" \
@@ -8,6 +11,9 @@ curl https://api.openai.com/v1/completions \
     "temperature": 0.7
   }'
 
+//
+//
+//
   curl https://api.openai.com/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $OPENAI_API_KEY" \
