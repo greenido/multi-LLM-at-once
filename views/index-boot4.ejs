@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Update & Chat</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/bootstrap@4.0.0/dist/css/bootstrap.min.css"
+      crossorigin="anonymous"
+    />
+    <style>
+      .custom-height {
+        height: 70vh;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container mt-3">
+      <div class="row">
+        <div class="col-md-12">
+          <div class="form-group">
+            <label for="context-input">Context:</label>
+            <input
+              type="text"
+              class="form-control"
+              id="context-input"
+              placeholder="Enter context here"
+            />
+          </div>
+          <button
+            type="button"
+            class="btn btn-primary float-right"
+            id="set-context-btn"
+          >
+            Update Context
+          </button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-md-6">
+          <div class="form-group">
+            <label for="chat-log-1">LLame2</label>
+            <textarea
+              class="form-control custom-height"
+              id="chat-log-1"
+              rows="5"
+              placeholder="..."
+            ></textarea>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="form-group">
+            <label for="chat-log-2">Mistral</label>
+            <textarea
+              class="form-control custom-height"
+              id="chat-log-2"
+              rows="5"
+              placeholder="..."
+            ></textarea>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-md-12">
+          <div class="form-group">
+            <label for="chat-input">Your request:</label>
+            <div class="input-group">
+              <input
+                type="text"
+                class="form-control"
+                id="chat-input"
+                placeholder="Enter your message"
+              />
+              <div class="input-group-append">
+                <button type="button" class="btn btn-primary" id="send-query-btn">
+                  Send
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script src="https://code.jquery.com/jquery-3.2.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.12.9/dist/umd/popper.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.0.0/dist/js/bootstrap.min.js"></script>
+    <script>
+      const chatLog1 = document.getElementById("chat-log-1");
+      const chatLog2 = document.getElementById("chat-log-2");
+      const queryInput = document.getElementById("chat-input");
+      const sendQueryBtn = document.getElementById("send-query-btn");
+      const contextInput = document.getElementById("context-input");
+      const setContextBtn = document.getElementById("set-context-btn");
+
+      // Function to listen to Enter key
+      function listentoEneter(inputElement, buttonElement) {
+        inputElement.addEventListener("keyup", function (event) {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            buttonElement.click();
+          }
+        });
+      }
+
+      listentoEneter(queryInput, sendQueryBtn);
+      listentoEneter(contextInput, setContextBtn);
+
+      //
+      sendQueryBtn.addEventListener("click", async () => {
+        const query = queryInput.value.trim();
+        if (query) {
+          appendMessage("Me", query, chatLog1);
+          appendMessage("Me", query, chatLog2);
+          queryInput.value = "";
+
+          // Send the query to the server for LLAME2
+          try {
+            const response = await fetch("/query", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ query }),
+            });
+
+            const data = await response.json();
+            if (data.response) {
+              appendMessage("AI", data.response, chatLog1);
+            } else {
+              appendMessage("Error", data.response, chatLog1);
+            }
+          } catch (error) {
+            appendMessage("Error", "An error occurred", chatLog1);
+            console.error("Error:", error);
+          }
+
+          // Send the query to the server for MISTRAL
+          try {
+            const response = await fetch("/query2", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ query }),
+            });
+
+            const data2 = await response.json();
+            if (data2.response) {
+              appendMessage("AI", data2.response, chatLog2);
+            } else {
+              appendMessage("Error", data2.response, chatLog2);
+            }
+          } catch (error) {
+            appendMessage("Error", "An error occurred", chatLog2);
+            console.error("Error:", error);
+          }
+        }
+      });
+
+      setContextBtn.addEventListener("click", () => {
+        const context = contextInput.value.trim();
+        fetch("/set-context", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: `context=${encodeURIComponent(context)}`,
+        })
+          .then(() => {
+            //window.location.reload();
+            console.log("Context updated: " + context);
+          })
+          .catch((error) => {
+            console.error("Error:", error);
+          });
+      });
+
+      function appendMessage(sender, message, chatLog) {
+        //const messageElement = document.createElement("div");
+        let messageElement = `* ${sender}: ${message.trim()}\n`;
+        chatLog.value += messageElement + "----\n";
+        //chatLog1.scrollTop = chatLog1.scrollHeight;
+      }
+    </script>
+  </body>
+</html>
