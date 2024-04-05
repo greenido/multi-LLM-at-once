@@ -1,4 +1,4 @@
-# Multi Llama Tool
+# ⛄️ Multi Llama Tool
 A web application for querying multiple Language Model (LLM) instances with a single query.
 
 <img src="images/2-lamas-in-space.png">
@@ -22,11 +22,10 @@ node server.mjs
 - [ ] Add timers per model
 - [ ] Add more models and a way to select them
 - [ ] Add more query options / pre-defined queries
-- [ ] Enable to save to file the results
+- [x] Enable to export to file 
 
 ## License
 MIT
 
 ## Got an idea? Questions?
-Feel free to open an issue or contact me at [https://x.com/greenido](https://x.com/greenido)
-```
+🏂 Feel free to open an issue or contact: [https://x.com/greenido](https://x.com/greenido)
