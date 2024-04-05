@@ -1,104 +1,286 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
-    <title>Local LLMs ⛄️</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>⛄️ Multi LLMs Tool</title>
+
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/css/bootstrap.min.css"
+      integrity="sha384-TX8t27EcRE3e/ihU7zmQxVncDAy5uIKz4rEkgIXeMed4M0jlfIDPvg6uqKI2xXr2"
+      crossorigin="anonymous"
+    />
+
     <style>
-      body {
-        font-family: Arial, sans-serif;
-        padding: 20px;
+      .custom-height {
+        height: 80vh;
       }
-      #chat-container {
-        max-width: 600px;
-        margin: 0 auto;
-      }
-      #context-input {
-        width: 100%;
-        height: 100px;
-        padding: 10px;
-        box-sizing: border-box;
-        margin-bottom: 10px;
-      }
-      #chat-log {
-        border: 1px solid #ccc;
-        padding: 10px;
-        height: 300px;
-        overflow-y: scroll;
-      }
-      #query-input {
-        width: 100%;
-        padding: 10px;
-        box-sizing: border-box;
-        margin-top: 10px;
+      .copy-btn-div {
+        position: absolute;
+        right: 20px;
+        top: 20px;
       }
     </style>
+    <script
+      src="https://kit.fontawesome.com/c0d69eab43.js"
+      crossorigin="anonymous"
+    ></script>
   </head>
   <body>
-    <div id="chat-container">
-      <h1>Local LLMs ⛄️</h1>
-      <textarea id="context-input" placeholder="Enter context here..."><%= context %></textarea>
-      <button id="set-context-btn">Set Context</button>
-      <div id="chat-log"></div>
-      <input type="text" id="query-input" placeholder="Ask a question...">
-      <button id="send-query-btn">Send</button>
+    <h1 class="text-center mt-3">⛄️ Multi LLMs Tool</h1>
+    <div class="container-fluid h-100">
+      <div class="row">
+        <div class="col-md-12">
+          <div class="form-group">
+            <label for="context-input">Context:</label>
+            <input
+              type="text"
+              class="form-control"
+              id="context-input"
+              placeholder="Enter context here... You are a world class expert in AI..."
+            />
+          </div>
+          <button
+            type="button"
+            class="btn btn-primary float-right"
+            id="set-context-btn"
+          >
+            Update Context
+          </button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-md-6">
+          <div class="form-group">
+            <h3>
+              <label for="chat-log-1">🐑 LLame2</label>
+              <span
+                id="spinner"
+                class="spinner-border spinner-border-sm d-none"
+                role="status"
+                aria-hidden="true"
+              ></span>
+            </h3>
+
+            <textarea
+              class="form-control custom-height"
+              id="chat-log-1"
+              rows="20"
+              placeholder="..."
+            ></textarea>
+            <div class="input-group-append copy-btn-div">
+              <button
+                class="btn btn-outline-secondary llame-copy-btn"
+                type="button"
+                data-toggle="tooltip"
+                data-placement="top"
+                title="Copy to clipboard"
+              >
+                <i class="fa-solid fa-copy"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="form-group">
+            <h3>
+              <label for="chat-log-2">⛵️ Mistral</label>
+              <span
+                id="spinner-mistral"
+                class="spinner-border spinner-border-sm d-none"
+                role="status"
+                aria-hidden="true"
+              ></span>
+            </h3>
+
+            <textarea
+              class="form-control custom-height"
+              id="chat-log-2"
+              rows="20"
+              placeholder="..."
+            ></textarea>
+            <div class="input-group-append copy-btn-div">
+              <button
+                class="btn btn-outline-secondary m-copy-btn"
+                type="button"
+                data-toggle="tooltip"
+                data-placement="top"
+                title="Copy to clipboard"
+              >
+                <i class="fas fa-copy"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-md-12">
+          <div class="form-group">
+            <label for="chat-input">Your request:</label>
+            <div class="input-group">
+              <input
+                type="text"
+                class="form-control"
+                id="chat-input"
+                placeholder="Enter your message"
+              />
+              <div class="input-group-append">
+                <button
+                  type="button"
+                  class="btn btn-primary"
+                  id="send-query-btn"
+                >
+                  Send
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
+    <script src="https://code.jquery.com/jquery-3.2.1.slim.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.12.9/dist/umd/popper.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.bundle.min.js"></script>
 
     <script>
-      const chatLog = document.getElementById('chat-log');
-      const queryInput = document.getElementById('query-input');
-      const sendQueryBtn = document.getElementById('send-query-btn');
-      const contextInput = document.getElementById('context-input');
-      const setContextBtn = document.getElementById('set-context-btn');
+      const chatLog1 = document.getElementById("chat-log-1");
+      const chatLog2 = document.getElementById("chat-log-2");
+      const queryInput = document.getElementById("chat-input");
+      const sendQueryBtn = document.getElementById("send-query-btn");
+      const contextInput = document.getElementById("context-input");
+      const setContextBtn = document.getElementById("set-context-btn");
 
-      sendQueryBtn.addEventListener('click', async () => {
+      // Function to listen to Enter key
+      function listentoEneter(inputElement, buttonElement) {
+        inputElement.addEventListener("keyup", function (event) {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            buttonElement.click();
+          }
+        });
+      }
+
+      listentoEneter(queryInput, sendQueryBtn);
+      listentoEneter(contextInput, setContextBtn);
+
+      //
+      sendQueryBtn.addEventListener("click", async () => {
         const query = queryInput.value.trim();
         if (query) {
-          appendMessage('Human', query);
-          queryInput.value = '';
+          appendMessage("Me", query, chatLog1);
+          appendMessage("Me", query, chatLog2);
+          queryInput.value = "";
 
+          // Send the query to the server for LLAME2
           try {
-            const response = await fetch('/query', {
-              method: 'POST',
+            toggleSpinner(document.getElementById("spinner"));
+            const response = await fetch("/query", {
+              method: "POST",
               headers: {
-                'Content-Type': 'application/json',
+                "Content-Type": "application/json",
               },
               body: JSON.stringify({ query }),
             });
 
             const data = await response.json();
+            toggleSpinner(document.getElementById("spinner"));
             if (data.response) {
-              appendMessage('AI', data.response);
+              appendMessage("AI", data.response, chatLog1);
             } else {
-              appendMessage('Error', data.response);
+              appendMessage("Error", data.response, chatLog1);
             }
           } catch (error) {
-            appendMessage('Error', 'An error occurred');
-            console.error('Error:', error);
+            appendMessage("Error", "An error occurred", chatLog1);
+            console.error("Error:", error);
+          }
+
+          // Send the query to the server for MISTRAL
+          try {
+            toggleSpinner(document.getElementById("spinner-mistral"));
+            const response = await fetch("/query2", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ query }),
+            });
+
+            const data2 = await response.json();
+            toggleSpinner(document.getElementById("spinner-mistral"));
+            if (data2.response) {
+              appendMessage("AI", data2.response, chatLog2);
+            } else {
+              appendMessage("Error", data2.response, chatLog2);
+            }
+          } catch (error) {
+            appendMessage("Error", "An error occurred", chatLog2);
+            console.error("Error:", error);
           }
         }
       });
 
-      setContextBtn.addEventListener('click', () => {
+      setContextBtn.addEventListener("click", () => {
         const context = contextInput.value.trim();
-        fetch('/set-context', {
-          method: 'POST',
+        fetch("/set-context", {
+          method: "POST",
           headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
+            "Content-Type": "application/x-www-form-urlencoded",
           },
           body: `context=${encodeURIComponent(context)}`,
         })
           .then(() => {
-            window.location.reload();
+            //window.location.reload();
+            console.log("Context updated: " + context);
           })
           .catch((error) => {
-            console.error('Error:', error);
+            console.error("Error:", error);
           });
       });
 
-      function appendMessage(sender, message) {
-        const messageElement = document.createElement('div');
-        messageElement.innerHTML = `<strong>${sender}:</strong> ${message.trim()}`;
-        chatLog.appendChild(messageElement);
-        chatLog.scrollTop = chatLog.scrollHeight;
+      //
+      //
+      //
+      function toggleSpinner(spinner) {
+        spinner.classList.toggle("d-none");
+      }
+
+      //
+      //
+      //
+      function appendMessage(sender, message, chatLog) {
+        //const messageElement = document.createElement("div");
+        let messageElement = `* ${sender}: ${message.trim()}\n`;
+        chatLog.value += messageElement + "----\n";
+        //chatLog1.scrollTop = chatLog1.scrollHeight;
+      }
+
+      //
+      // Listen to copy button
+      //
+      $(document).ready(function () {
+        $(".m-copy-btn").click(function () {
+          copyToClipboard(chatLog2);
+        });
+        $(".llame-copy-btn").click(function () {
+          copyToClipboard(chatLog1);
+        });
+      });
+
+      function copyToClipboard(element) {
+        const textToCopy = element.value;
+        navigator.clipboard
+          .writeText(textToCopy)
+          .then(() => {
+            console.log("Text copied to clipboard!");
+            // element.tooltip('dispose').tooltip({
+            //   title: 'Copied!',
+            //   trigger: 'manual'
+            // }).tooltip('show');
+          })
+          .catch((err) => {
+            console.error("Failed to copy text:", err);
+          });
       }
     </script>
   </body>

@@ -1,6 +1,8 @@
 /**
  * This is a simple Express server that serves a chat interface and interacts 
  * with the Claude AI API.
+ * @author @greenido
+ * @date 4-4-2024
  */
 const express = require('express');
 const axios = require('axios');
@@ -19,7 +21,6 @@ app.use(express.urlencoded({ extended: true }));
 app.set('view engine', 'ejs');
 // Set the views directory
 app.set('views', path.join(__dirname, 'views'));
-// app.set('views', '/Applications/MAMP/htdocs/AI/multi-at-once/views');
 
 // Serve static files from the public directory
 app.use(express.static('public'));
@@ -27,7 +28,6 @@ app.use(express.static('public'));
 // Route for rendering the chat interface
 app.get('/', (req, res) => {
   res.render('index', { context });
-  //res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 // Route for setting the context
@@ -49,7 +49,7 @@ app.post('/query', async (req, res) => {
       temperature: 0.7,
       stream: false,
       // Replace with your actual API key
-      headers: { 'X-API-Key': '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' },
+      headers: { 'X-API-Key': process.env.CLAUDE_API_KEY },
     });
 
     const result = response.data.result;

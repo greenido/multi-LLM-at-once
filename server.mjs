@@ -31,11 +31,6 @@ app.get('/', (req, res) => {
   console.log('=**= Rendering index with context:', context);
   res.render('index', { context });
 });
-
-app.get('/index-boot4', (req, res) => {
-  console.log('=**= Rendering index with context:', context);
-  res.render('index-boot4', { context });
-});
 // Route for setting the context
 app.post('/set-context', (req, res) => {
   context = req.body.context;
@@ -60,8 +55,8 @@ app.post('/query', async (req, res) => {
     console.log('== Response:', response);
     res.json({ response });
   } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ error: 'An error occurred' });
+    console.error('🚨 Error:', error);
+    res.status(500).json({ error: '🚨 An error occurred' });
   }
 });
 
@@ -83,8 +78,8 @@ app.post('/query2', async (req, res) => {
     console.log('== Response:', response);
     res.json({ response });
   } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ error: 'An error occurred' });
+    console.error('🚨 Error:', error);
+    res.status(500).json({ error: '🚨 An error occurred' });
   }
 });
 

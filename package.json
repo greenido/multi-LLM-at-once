@@ -1,4 +1,6 @@
 {
+  "name": "multi-LLM-at-once",
+  "version": "0.1.1",
   "dependencies": {
     "@langchain/community": "^0.0.44",
     "axios": "^1.6.8",

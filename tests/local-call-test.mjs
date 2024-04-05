@@ -1,3 +1,6 @@
+/**
+ * This is a test script to call the local Ollama server.
+ */
 import { Ollama } from "@langchain/community/llms/ollama";
 
 const ollama = new Ollama({
@@ -6,22 +9,8 @@ const ollama = new Ollama({
 });
 
 const answer = await ollama.invoke(`write two short jokes`);
-
 console.log(answer);
 
-/*const axios = require('axios');
-
-const data = {
-  "model": 'mistral',
-  "stream": false,
-  "prompt": "write a short joke"
-  // "messages": [
-  //   {
-  //     role: 'user',
-  //     content: 'why is the sky blue?'
-  //   }
-  // ]
-};
 console.log('Request:', data);
 axios.post('http://localhost:11434/api/generate', data)
   .then(response => {
@@ -30,4 +19,4 @@ axios.post('http://localhost:11434/api/generate', data)
   .catch(error => {
     console.error('Error:', error);
   });
-*/
+

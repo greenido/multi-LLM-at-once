@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Local LLMs ⛄️</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        padding: 20px;
+      }
+      #chat-container {
+        max-width: 600px;
+        margin: 0 auto;
+      }
+      #context-input {
+        width: 100%;
+        height: 100px;
+        padding: 10px;
+        box-sizing: border-box;
+        margin-bottom: 10px;
+      }
+      #chat-log {
+        border: 1px solid #ccc;
+        padding: 10px;
+        height: 300px;
+        overflow-y: scroll;
+      }
+      #query-input {
+        width: 100%;
+        padding: 10px;
+        box-sizing: border-box;
+        margin-top: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="chat-container">
+      <h1>Local LLMs ⛄️</h1>
+      <textarea id="context-input" placeholder="Enter context here..."><%= context %></textarea>
+      <button id="set-context-btn">Set Context</button>
+      <div id="chat-log"></div>
+      <input type="text" id="query-input" placeholder="Ask a question...">
+      <button id="send-query-btn">Send</button>
+    </div>
+
+    <script>
+      const chatLog = document.getElementById('chat-log');
+      const queryInput = document.getElementById('query-input');
+      const sendQueryBtn = document.getElementById('send-query-btn');
+      const contextInput = document.getElementById('context-input');
+      const setContextBtn = document.getElementById('set-context-btn');
+
+      sendQueryBtn.addEventListener('click', async () => {
+        const query = queryInput.value.trim();
+        if (query) {
+          appendMessage('Human', query);
+          queryInput.value = '';
+
+          try {
+            const response = await fetch('/query', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ query }),
+            });
+
+            const data = await response.json();
+            if (data.response) {
+              appendMessage('AI', data.response);
+            } else {
+              appendMessage('Error', data.response);
+            }
+          } catch (error) {
+            appendMessage('Error', 'An error occurred');
+            console.error('Error:', error);
+          }
+        }
+      });
+
+      setContextBtn.addEventListener('click', () => {
+        const context = contextInput.value.trim();
+        fetch('/set-context', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: `context=${encodeURIComponent(context)}`,
+        })
+          .then(() => {
+            window.location.reload();
+          })
+          .catch((error) => {
+            console.error('Error:', error);
+          });
+      });
+
+      function appendMessage(sender, message) {
+        const messageElement = document.createElement('div');
+        messageElement.innerHTML = `<strong>${sender}:</strong> ${message.trim()}`;
+        chatLog.appendChild(messageElement);
+        chatLog.scrollTop = chatLog.scrollHeight;
+      }
+    </script>
+  </body>
+</html>
