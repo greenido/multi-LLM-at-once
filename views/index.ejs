@@ -70,7 +70,7 @@
               </a>
               <div class="dropdown-menu" aria-labelledby="actionsDropdown">
                 <a class="dropdown-item" href="#" onclick="exportTextarea()">Export</a>
-                <a class="dropdown-item" href="#">Copy</a>
+                <a class="dropdown-item" href="#" onClick="copyAllToClipboard()">Copy To Clipboard</a>
               </div>
             </li>
             <li class="nav-item dropdown">
@@ -109,12 +109,13 @@
       <div class="row">
         <div class="col-md-12">
           <div class="form-group">
-            <label for="context-input">Context:</label>
+            <!-- <label for="context-input">Context:</label> -->
             <input
               type="text"
               class="form-control"
               id="context-input"
               placeholder="Enter context here... You are a world class expert in AI..."
+              value="<%= context %>"
             />
           </div>
           <button
@@ -193,7 +194,7 @@
       <div class="row">
         <div class="col-md-12">
           <div class="form-group">
-            <label for="chat-input">Your request:</label>
+            <!-- <label for="chat-input">Your request:</label> -->
             <div class="input-group">
               <input
                 type="text"

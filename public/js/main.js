@@ -92,21 +92,17 @@ setContextBtn.addEventListener("click", () => {
     });
 });
 
-//
-//
-//
+// Utility function to toggle the spinner off/on while we working on the request
 function toggleSpinner(spinner) {
   spinner.classList.toggle("d-none");
 }
 
-//
-//
-//
+// Utility function to append a message to the chat log
 function appendMessage(sender, message, chatLog) {
   //const messageElement = document.createElement("div");
   let messageElement = `* ${sender}: ${message.trim()}\n`;
   chatLog.value += messageElement + "----\n";
-  //chatLog1.scrollTop = chatLog1.scrollHeight;
+  chatLog.scrollTop = chatLog.scrollHeight;
 }
 
 // utility function to copy text to clipboard
@@ -119,6 +115,19 @@ function copyToClipboard(element) {
     })
     .catch((err) => {
       console.error("Failed to copy text:", err);
+    });
+}
+
+// copy both chat logs to clipboard
+function copyAllToClipboard() {
+  const textToCopy = 'LLAMA2:\n' + chatLog1.value + '\n=====\nMistral:\n' + chatLog2.value;
+  navigator.clipboard
+    .writeText(textToCopy)
+    .then(() => {
+      console.log("ALL Text copied to clipboard!");
+    })
+    .catch((err) => {
+      console.error("Failed to copy ALL text:", err);
     });
 }
 
