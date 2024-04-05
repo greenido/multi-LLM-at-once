@@ -21,6 +21,18 @@
         right: 20px;
         top: 20px;
       }
+
+      .navbar-brand {
+        margin-right: auto;
+      }
+      .spinner-border {
+        width: 1.5rem;
+        height: 1.5rem;
+        position: absolute;
+        margin-top: 5px;
+        margin-left: 5px;
+        background-color: bisque;
+      }
     </style>
     <script
       src="https://kit.fontawesome.com/c0d69eab43.js"
@@ -28,7 +40,71 @@
     ></script>
   </head>
   <body>
-    <h1 class="text-center mt-3">⛄️ Multi LLMs Tool</h1>
+    <nav class="navbar navbar-expand-lg navbar-light bg-light">
+      <div class="container">
+        <a class="navbar-brand" href="#">⛄️ Multi LLMs Tool</a>
+        <button
+          class="navbar-toggler"
+          type="button"
+          data-toggle="collapse"
+          data-target="#navbarNav"
+          aria-controls="navbarNav"
+          aria-expanded="false"
+          aria-label="Toggle navigation"
+        >
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav ml-auto">
+            <li class="nav-item dropdown">
+              <a
+                class="nav-link dropdown-toggle"
+                href="#"
+                id="actionsDropdown"
+                role="button"
+                data-toggle="dropdown"
+                aria-haspopup="true"
+                aria-expanded="false"
+              >
+                Actions
+              </a>
+              <div class="dropdown-menu" aria-labelledby="actionsDropdown">
+                <a class="dropdown-item" href="#" onclick="exportTextarea()">Export</a>
+                <a class="dropdown-item" href="#">Copy</a>
+              </div>
+            </li>
+            <li class="nav-item dropdown">
+              <a
+                class="nav-link dropdown-toggle"
+                href="#"
+                id="helpDropdown"
+                role="button"
+                data-toggle="dropdown"
+                aria-haspopup="true"
+                aria-expanded="false"
+              >
+                Help
+              </a>
+              <div class="dropdown-menu" aria-labelledby="helpDropdown">
+                <a
+                  class="dropdown-item"
+                  href="https://github.com/greenido/multi-LLM-at-once"
+                  target="_blank"
+                  >Source Code</a
+                >
+                <a
+                  class="dropdown-item"
+                  href="https://x.com/greenido"
+                  target="_blank"
+                  >Contact</a
+                >
+              </div>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
     <div class="container-fluid h-100">
       <div class="row">
         <div class="col-md-12">
@@ -143,145 +219,6 @@
     <script src="https://cdn.jsdelivr.net/npm/popper.js@1.12.9/dist/umd/popper.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.bundle.min.js"></script>
 
-    <script>
-      const chatLog1 = document.getElementById("chat-log-1");
-      const chatLog2 = document.getElementById("chat-log-2");
-      const queryInput = document.getElementById("chat-input");
-      const sendQueryBtn = document.getElementById("send-query-btn");
-      const contextInput = document.getElementById("context-input");
-      const setContextBtn = document.getElementById("set-context-btn");
-
-      // Function to listen to Enter key
-      function listentoEneter(inputElement, buttonElement) {
-        inputElement.addEventListener("keyup", function (event) {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            buttonElement.click();
-          }
-        });
-      }
-
-      listentoEneter(queryInput, sendQueryBtn);
-      listentoEneter(contextInput, setContextBtn);
-
-      //
-      sendQueryBtn.addEventListener("click", async () => {
-        const query = queryInput.value.trim();
-        if (query) {
-          appendMessage("Me", query, chatLog1);
-          appendMessage("Me", query, chatLog2);
-          queryInput.value = "";
-
-          // Send the query to the server for LLAME2
-          try {
-            toggleSpinner(document.getElementById("spinner"));
-            const response = await fetch("/query", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({ query }),
-            });
-
-            const data = await response.json();
-            toggleSpinner(document.getElementById("spinner"));
-            if (data.response) {
-              appendMessage("AI", data.response, chatLog1);
-            } else {
-              appendMessage("Error", data.response, chatLog1);
-            }
-          } catch (error) {
-            appendMessage("Error", "An error occurred", chatLog1);
-            console.error("Error:", error);
-          }
-
-          // Send the query to the server for MISTRAL
-          try {
-            toggleSpinner(document.getElementById("spinner-mistral"));
-            const response = await fetch("/query2", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({ query }),
-            });
-
-            const data2 = await response.json();
-            toggleSpinner(document.getElementById("spinner-mistral"));
-            if (data2.response) {
-              appendMessage("AI", data2.response, chatLog2);
-            } else {
-              appendMessage("Error", data2.response, chatLog2);
-            }
-          } catch (error) {
-            appendMessage("Error", "An error occurred", chatLog2);
-            console.error("Error:", error);
-          }
-        }
-      });
-
-      setContextBtn.addEventListener("click", () => {
-        const context = contextInput.value.trim();
-        fetch("/set-context", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-          },
-          body: `context=${encodeURIComponent(context)}`,
-        })
-          .then(() => {
-            //window.location.reload();
-            console.log("Context updated: " + context);
-          })
-          .catch((error) => {
-            console.error("Error:", error);
-          });
-      });
-
-      //
-      //
-      //
-      function toggleSpinner(spinner) {
-        spinner.classList.toggle("d-none");
-      }
-
-      //
-      //
-      //
-      function appendMessage(sender, message, chatLog) {
-        //const messageElement = document.createElement("div");
-        let messageElement = `* ${sender}: ${message.trim()}\n`;
-        chatLog.value += messageElement + "----\n";
-        //chatLog1.scrollTop = chatLog1.scrollHeight;
-      }
-
-      //
-      // Listen to copy button
-      //
-      $(document).ready(function () {
-        $(".m-copy-btn").click(function () {
-          copyToClipboard(chatLog2);
-        });
-        $(".llame-copy-btn").click(function () {
-          copyToClipboard(chatLog1);
-        });
-      });
-
-      function copyToClipboard(element) {
-        const textToCopy = element.value;
-        navigator.clipboard
-          .writeText(textToCopy)
-          .then(() => {
-            console.log("Text copied to clipboard!");
-            // element.tooltip('dispose').tooltip({
-            //   title: 'Copied!',
-            //   trigger: 'manual'
-            // }).tooltip('show');
-          })
-          .catch((err) => {
-            console.error("Failed to copy text:", err);
-          });
-      }
-    </script>
+   <script src="js/main.js"></script>
   </body>
 </html>
