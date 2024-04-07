@@ -23,6 +23,7 @@ node server.mjs
 - [ ] Add more models and a way to select them
 - [ ] Add more query options / pre-defined queries
 - [x] Enable to export to file 
+- [ ] Allow to leverage [llama_index](https://github.com/run-llama/llama_index)
 
 ## License
 MIT
