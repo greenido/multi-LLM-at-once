@@ -48,7 +48,7 @@ app.post('/query', async (req, res) => {
   try {
     const ollama = new Ollama({
       baseUrl: "http://localhost:11434",
-      model: "llama2",
+      model: "llama2:13b",
     });
     
     const response = await ollama.invoke(query);

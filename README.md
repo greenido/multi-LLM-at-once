@@ -7,12 +7,16 @@ A web application for querying multiple Language Model (LLM) instances with a si
 ## How to run the app
 1. Clone the repo
 2. Install the dependencies (npm install)
+```
+npm install
+npm i ollama
+```
 3. Open a terminal and run the following command:
 ```
 node server.mjs
 ```
-4. Open localhost:3000 in your browser
-5. Start to query the local models with the query input box.
+1. Open localhost:3000 in your browser
+2. Start to query the local models with the query input box.
 
 ## How does it look
 
