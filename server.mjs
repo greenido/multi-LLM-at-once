@@ -39,7 +39,7 @@ app.post('/set-context', (req, res) => {
 });
 
 //
-// Route for handling user queries with the llama2 model
+// Route for handling user queries with the llama 3 model
 //
 app.post('/query', async (req, res) => {
   let query = req.body.query;
@@ -48,7 +48,7 @@ app.post('/query', async (req, res) => {
   try {
     const ollama = new Ollama({
       baseUrl: "http://localhost:11434",
-      model: "llama2:13b",
+      model: "llama3",
     });
     
     const response = await ollama.invoke(query);
@@ -62,16 +62,16 @@ app.post('/query', async (req, res) => {
 
 
 //
-// Route for handling user queries with the mistral model
+// Route for handling user queries with the phi3 model
 //
 app.post('/query2', async (req, res) => {
   let query = req.body.query;
   query = "context: " + context + ". " + query
-  console.log('☀️ Query for mistral:', query);
+  console.log('☀️ Query for phi3:', query);
   try {
     const ollama = new Ollama({
       baseUrl: "http://localhost:11434",
-      model: "mistral",
+      model: "phi3",
     });
     
     const response = await ollama.invoke(query);
