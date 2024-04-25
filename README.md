@@ -1,6 +1,9 @@
 # ⛄️ Multi Llama Tool
 A web application for querying multiple Language Model (LLM) instances with a single query.
 
+<img src="images/multi-screen-llama-25-4-2024.png">
+
+or in the last version with the older models:
 <img src="images/2-lamas-in-space.png">
 
 
