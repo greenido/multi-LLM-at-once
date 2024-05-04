@@ -3,7 +3,9 @@ A web application for querying multiple Language Model (LLM) instances with a si
 
 <img src="images/multi-screen-llama-25-4-2024.png">
 
-or in the last version with the older models:
+For a longer explanation on the why/how/when: https://greenido.wordpress.com/2024/04/08/the-power-of-many-why-you-should-consider-using-multiple-large-language-models/
+
+...the last version with the older models:
 <img src="images/2-lamas-in-space.png">
 
 
