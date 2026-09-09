@@ -36,6 +36,21 @@ app.post('/set-context', (req, res) => {
   res.json({ context });
 });
 
+/**
+ * Turn an Ollama failure into something a user can act on. The raw errors are
+ * unhelpful: an unreachable daemon surfaces only as "fetch failed".
+ */
+function describeError(error, model) {
+  const message = error?.message ?? String(error);
+  if (/fetch failed|ECONNREFUSED|ENOTFOUND|socket hang up/i.test(message)) {
+    return 'Cannot reach Ollama at http://localhost:11434 — is `ollama serve` running?';
+  }
+  if (/not found|no such model|try pulling/i.test(message)) {
+    return `Ollama does not have "${model}" pulled. Run: ollama pull ${model}`;
+  }
+  return message;
+}
+
 /** Send one query to a local Ollama model and return its full response. */
 async function runQuery(model, rawQuery) {
   const query = `context: ${context}. ${rawQuery}`;
@@ -56,7 +71,7 @@ app.post('/query', async (req, res) => {
     res.json({ response: await runQuery('llama3', req.body.query) });
   } catch (error) {
     console.error('🚨 Error:', error);
-    res.status(500).json({ error: '🚨 An error occurred' });
+    res.status(500).json({ error: describeError(error, 'llama3') });
   }
 });
 
@@ -68,7 +83,7 @@ app.post('/query2', async (req, res) => {
     res.json({ response: await runQuery('phi3', req.body.query) });
   } catch (error) {
     console.error('🚨 Error:', error);
-    res.status(500).json({ error: '🚨 An error occurred' });
+    res.status(500).json({ error: describeError(error, 'phi3') });
   }
 });
 

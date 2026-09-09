@@ -13,9 +13,10 @@ export default function App() {
   const [contextSaved, setContextSaved] = useState(false);
   const [query, setQuery] = useState('');
   const [transcripts, setTranscripts] = useState(emptyTranscripts);
-  const [busy, setBusy] = useState({});
+  // modelId -> timestamp the in-flight request started, or undefined when idle.
+  const [startedAt, setStartedAt] = useState({});
 
-  const anyBusy = MODELS.some((model) => busy[model.id]);
+  const anyRunning = MODELS.some((model) => startedAt[model.id]);
 
   function appendTurn(modelId, turn) {
     setTranscripts((prev) => ({ ...prev, [modelId]: [...prev[modelId], turn] }));
@@ -32,24 +33,38 @@ export default function App() {
   }
 
   async function ask(model, text) {
-    setBusy((prev) => ({ ...prev, [model.id]: true }));
+    const begunAt = Date.now();
+    setStartedAt((prev) => ({ ...prev, [model.id]: begunAt }));
     try {
       const response = await fetch(model.endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: text }),
       });
-      const data = await response.json();
-      if (data.response) {
-        appendTurn(model.id, { role: 'assistant', text: data.response });
-      } else {
-        appendTurn(model.id, { role: 'error', text: 'An error occurred' });
+      const data = await response.json().catch(() => ({}));
+
+      // Surface what the server actually said instead of a generic string.
+      if (!response.ok || data.error) {
+        throw new Error(data.error || `Request failed with HTTP ${response.status}`);
       }
+      if (typeof data.response !== 'string') {
+        throw new Error('The server returned no response text.');
+      }
+
+      appendTurn(model.id, {
+        role: 'assistant',
+        text: data.response,
+        ms: Date.now() - begunAt,
+      });
     } catch (error) {
-      console.error(`${model.label} request failed:`, error);
-      appendTurn(model.id, { role: 'error', text: 'An error occurred' });
+      appendTurn(model.id, {
+        role: 'error',
+        text: error.message,
+        ms: Date.now() - begunAt,
+      });
     } finally {
-      setBusy((prev) => ({ ...prev, [model.id]: false }));
+      // In finally, so a throw anywhere above still clears the spinner.
+      setStartedAt((prev) => ({ ...prev, [model.id]: undefined }));
     }
   }
 
@@ -59,11 +74,9 @@ export default function App() {
     setQuery('');
     MODELS.forEach((model) => appendTurn(model.id, { role: 'user', text }));
 
-    // One model at a time, which is what the pre-React client did. The
-    // parallel fan-out this app is named for is a separate change.
-    for (const model of MODELS) {
-      await ask(model, text);
-    }
+    // Every model starts now. Wall time is the slowest model, not the sum of
+    // all of them, and one model failing does not hold up the others.
+    await Promise.allSettled(MODELS.map((model) => ask(model, text)));
   }
 
   function copy(text) {
@@ -93,13 +106,13 @@ export default function App() {
               key={model.id}
               model={model}
               turns={transcripts[model.id]}
-              busy={Boolean(busy[model.id])}
+              startedAt={startedAt[model.id]}
               onCopy={copy}
             />
           ))}
         </div>
 
-        <QueryBar value={query} onChange={setQuery} onSend={send} disabled={anyBusy} />
+        <QueryBar value={query} onChange={setQuery} onSend={send} disabled={anyRunning} />
       </main>
     </div>
   );
