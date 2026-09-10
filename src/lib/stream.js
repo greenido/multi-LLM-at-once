@@ -1,4 +1,11 @@
 /**
+ * Optional measurements a usage frame can carry beyond the two token counts:
+ * how many of the output tokens were reasoning, and — from Ollama, which times
+ * itself — how long the model took to load and to decode.
+ */
+const USAGE_EXTRAS = ['reasoningTokens', 'loadMs', 'evalMs'];
+
+/**
  * Reads the newline-delimited JSON stream that POST /query returns, calling
  * onChunk for each piece of text as it arrives and onUsage with the token
  * counts the provider reported.
@@ -42,10 +49,14 @@ export async function streamQuery({ model, messages, system, signal, onChunk, on
 
     if (event.type === 'chunk' && event.text) onChunk(event.text);
     if (event.type === 'usage') {
-      onUsage?.({
+      const usage = {
         promptTokens: event.promptTokens ?? 0,
         completionTokens: event.completionTokens ?? 0,
-      });
+      };
+      for (const field of USAGE_EXTRAS) {
+        if (typeof event[field] === 'number') usage[field] = event[field];
+      }
+      onUsage?.(usage);
     }
     if (event.type === 'error') throw new Error(event.error);
   };

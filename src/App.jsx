@@ -177,6 +177,13 @@ export default function App() {
 
     let pending = '';
     let lastFlush = 0;
+    // When the first token arrived, which splits waiting for a model from
+    // watching it write. Kept even for an answer that fails or is stopped.
+    let firstTokenAt;
+    const timings = () => ({
+      ms: Date.now() - begunAt,
+      ...(firstTokenAt === undefined ? {} : { ttftMs: firstTokenAt - begunAt }),
+    });
     const flush = () => {
       if (!pending) return;
       const chunk = pending;
@@ -191,6 +198,7 @@ export default function App() {
         system,
         signal: controller.signal,
         onChunk: (chunk) => {
+          firstTokenAt ??= Date.now();
           pending += chunk;
           const now = performance.now();
           if (now - lastFlush >= FLUSH_INTERVAL_MS) {
@@ -201,13 +209,13 @@ export default function App() {
         onUsage: (usage) => patchLastTurn(model.id, () => ({ usage })),
       });
       flush();
-      patchLastTurn(model.id, () => ({ streaming: false, ms: Date.now() - begunAt }));
+      patchLastTurn(model.id, () => ({ streaming: false, ...timings() }));
     } catch (error) {
       flush();
       const cancelled = error.name === 'AbortError';
       patchLastTurn(model.id, (last) => ({
         streaming: false,
-        ms: Date.now() - begunAt,
+        ...timings(),
         // A cancelled answer keeps whatever streamed in; a failure with no
         // text at all becomes the error itself.
         role: cancelled || last.text ? last.role : 'error',

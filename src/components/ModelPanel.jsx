@@ -2,12 +2,13 @@ import { memo, useCallback, useEffect, useRef } from 'react';
 import Markdown from './Markdown.jsx';
 import { totalTokens, transcriptToText } from '../lib/transcript.js';
 import { formatDuration, useElapsed } from '../lib/duration.js';
+import { formatTokens, turnStats } from '../lib/metrics.js';
 import { isAtBottom } from '../lib/scroll.js';
 
 const ROLE_LABELS = { user: 'Me', assistant: 'AI', error: 'Error' };
 
-const formatTokens = ({ promptTokens, completionTokens }) =>
-  `${promptTokens.toLocaleString()} in · ${completionTokens.toLocaleString()} out`;
+const TIMING_HELP =
+  'Total time · model load (a cold local model only) · time to the first token · output speed once it started';
 
 /**
  * The live timer ticks ten times a second. On its own that would re-render the
@@ -35,19 +36,20 @@ function ElapsedTime({ startedAt, label }) {
  * and react-markdown does not re-parse an answer that has not changed.
  */
 const Turn = memo(function Turn({ turn }) {
+  const { duration, load, firstToken, speed, tokens } = turnStats(turn);
+  const timing = [duration, load, firstToken, speed].filter(Boolean).join(' · ');
+
   return (
     <li>
       <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
         {ROLE_LABELS[turn.role]}
-        {turn.ms !== undefined && (
-          <span className="ml-2 font-mono normal-case tabular-nums text-slate-400">
-            {formatDuration(turn.ms)}
+        {timing && (
+          <span title={TIMING_HELP} className="ml-2 font-mono normal-case tabular-nums text-slate-400">
+            {timing}
           </span>
         )}
-        {turn.usage && (
-          <span className="ml-2 font-mono normal-case tabular-nums text-slate-300">
-            {formatTokens(turn.usage)}
-          </span>
+        {tokens && (
+          <span className="ml-2 font-mono normal-case tabular-nums text-slate-300">{tokens}</span>
         )}
       </span>
 
