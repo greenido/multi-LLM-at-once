@@ -1,14 +1,5 @@
 import { transcriptToText } from '../lib/transcript.js';
-
-function Spinner() {
-  return (
-    <span
-      role="status"
-      aria-label="Waiting for the model"
-      className="inline-block size-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600"
-    />
-  );
-}
+import { formatDuration, useElapsed } from '../lib/duration.js';
 
 const ROLE_STYLES = {
   user: 'text-slate-500',
@@ -18,14 +9,30 @@ const ROLE_STYLES = {
 
 const ROLE_LABELS = { user: 'Me', assistant: 'AI', error: 'Error' };
 
-export default function ModelPanel({ model, turns, busy, onCopy }) {
+export default function ModelPanel({ model, turns, startedAt, onCopy }) {
+  const elapsed = useElapsed(startedAt);
+  const running = Boolean(startedAt);
+
   return (
     <section className="flex min-h-0 flex-col rounded-xl border border-slate-200 bg-white shadow-sm">
       <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-2.5">
         <h2 className="text-sm font-semibold text-slate-900">
           <span aria-hidden="true">{model.emoji}</span> {model.label}
         </h2>
-        {busy && <Spinner />}
+
+        {running && (
+          <>
+            <span
+              role="status"
+              aria-label={`Waiting for ${model.label}`}
+              className="inline-block size-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600"
+            />
+            <span className="font-mono text-xs tabular-nums text-slate-500">
+              {formatDuration(elapsed)}
+            </span>
+          </>
+        )}
+
         <button
           type="button"
           onClick={() => onCopy(transcriptToText(turns))}
@@ -46,6 +53,11 @@ export default function ModelPanel({ model, turns, busy, onCopy }) {
               <li key={index} className="text-sm">
                 <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                   {ROLE_LABELS[turn.role]}
+                  {turn.ms !== undefined && (
+                    <span className="ml-2 font-mono normal-case tabular-nums text-slate-400">
+                      {formatDuration(turn.ms)}
+                    </span>
+                  )}
                 </span>
                 <p className={`mt-1 font-mono text-[13px] leading-relaxed whitespace-pre-wrap ${ROLE_STYLES[turn.role]}`}>
                   {turn.text}
