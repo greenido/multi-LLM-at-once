@@ -330,14 +330,18 @@ app.delete('/api/prompts/:id', (req, res) => {
 //
 // The response is newline-delimited JSON so the client can render tokens as
 // they arrive instead of waiting out the whole completion:
+//   {"type":"reasoning","text":"..."}                      zero or more, ahead of the answer
 //   {"type":"chunk","text":"..."}                          zero or more
 //   {"type":"usage","promptTokens":9,"completionTokens":4}  at most one
 //   {"type":"done"}                 or {"type":"error","error":"..."}
 //
+// `think: true` asks a model that can reason to do it and show it. Models that
+// reason unasked send their reasoning either way.
+//
 const ROLES = new Set(['user', 'assistant']);
 
 app.post('/query', async (req, res) => {
-  const { model, messages, system } = req.body ?? {};
+  const { model, messages, system, think } = req.body ?? {};
 
   if (typeof model !== 'string' || !model.trim()) {
     return res.status(400).json({ error: 'A model id is required.' });
@@ -355,6 +359,9 @@ app.post('/query', async (req, res) => {
   }
   if (system !== undefined && typeof system !== 'string') {
     return res.status(400).json({ error: 'system must be a string when given.' });
+  }
+  if (think !== undefined && typeof think !== 'boolean') {
+    return res.status(400).json({ error: 'think must be true or false when given.' });
   }
 
   const parsed = parseModelId(model);
@@ -374,7 +381,7 @@ app.post('/query', async (req, res) => {
   }
 
   console.log(
-    `☀️ ${model}: ${messages.length} message(s), system ${system?.trim() ? 'set' : 'unset'}`,
+    `☀️ ${model}: ${messages.length} message(s), system ${system?.trim() ? 'set' : 'unset'}${think ? ', thinking' : ''}`,
   );
 
   // The browser going away, and a model that never finishes, both need to stop
@@ -405,6 +412,10 @@ app.post('/query', async (req, res) => {
     // of the user's question, so the model weights it as an instruction. Each
     // adapter places it where its own API expects.
     system: system?.trim() || null,
+    // The Thinking switch, and what the model's listing said about how it
+    // thinks: whether it can be asked to, and in what form.
+    think: think === true,
+    thinking: availability.model.thinking,
     signal: controller.signal,
   })[Symbol.asyncIterator]();
 
@@ -429,10 +440,15 @@ app.post('/query', async (req, res) => {
 
   try {
     let characters = 0;
+    let reasoned = 0;
     let item = first;
 
     while (!item.done) {
-      const { text, usage } = item.value;
+      const { text, reasoning, usage } = item.value;
+      if (reasoning) {
+        reasoned += reasoning.length;
+        send({ type: 'reasoning', text: reasoning });
+      }
       if (text) {
         characters += text.length;
         send({ type: 'chunk', text });
@@ -442,7 +458,7 @@ app.post('/query', async (req, res) => {
     }
 
     send({ type: 'done' });
-    console.log(`== ${model} streamed ${characters} chars`);
+    console.log(`== ${model} streamed ${characters} chars${reasoned ? ` and ${reasoned} of reasoning` : ''}`);
   } catch (error) {
     // An abort is expected: either the user cancelled or we timed out.
     if (!cancelled) {

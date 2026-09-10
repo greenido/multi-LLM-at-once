@@ -5,6 +5,9 @@
  *
  *   POST /models/{model}:streamGenerateContent?alt=sse
  *   data: {"candidates":[{"content":{"parts":[{"text":"Hi"}]}}],"usageMetadata":{…}}
+ *
+ * A part marked "thought": true is a summary of the model's reasoning rather
+ * than the answer; one only arrives when the request asks for it.
  */
 import {
   describeNetworkError,
@@ -47,19 +50,23 @@ export const gemini = {
     if (!response.ok) throw new Error(await describeResponseError(response, LABEL));
 
     const { models = [] } = await response.json();
-    return sortModels(
+    // The listing says what each model can do, thinking included, so ask it
+    // rather than guess.
+    const thinks = new Map(
       models
-        // The listing says what each model can do, so ask it rather than guess.
         .filter((entry) => entry.supportedGenerationMethods?.includes('generateContent'))
-        .map((entry) => entry.name?.replace(/^models\//, ''))
-        .filter((name) => typeof name === 'string' && !NOT_CHAT.test(name)),
+        .map((entry) => [entry.name?.replace(/^models\//, ''), entry.thinking === true])
+        .filter(([name]) => typeof name === 'string' && !NOT_CHAT.test(name)),
     );
+    return sortModels([...thinks.keys()]).map((name) => (thinks.get(name) ? { name, thinking: true } : { name }));
   },
 
-  async *chat({ key, model, messages, system, signal }) {
+  async *chat({ key, model, messages, system, think, thinking, signal }) {
     const body = {
       contents: toContents(messages),
       ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
+      // A thinking model reasons whether or not it is asked to show it.
+      ...(think && thinking ? { generationConfig: { thinkingConfig: { includeThoughts: true } } } : {}),
     };
 
     let response;
@@ -89,9 +96,15 @@ export const gemini = {
       if (event.error) throw new Error(event.error.message ?? `${LABEL} failed mid-stream.`);
 
       // A candidate can be split across several parts within one frame.
-      const text = (event.candidates?.[0]?.content?.parts ?? [])
-        .map((part) => part.text ?? '')
-        .join('');
+      const parts = event.candidates?.[0]?.content?.parts ?? [];
+      const join = (thought) =>
+        parts
+          .filter((part) => Boolean(part.thought) === thought)
+          .map((part) => part.text ?? '')
+          .join('');
+      const reasoning = join(true);
+      const text = join(false);
+      if (reasoning) yield { reasoning };
       if (text) yield { text };
 
       if (event.usageMetadata) {

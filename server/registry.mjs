@@ -37,8 +37,8 @@ export function parseModelId(id) {
 export const modelId = (providerId, name) => `${providerId}:${name}`;
 
 /**
- * A listing is a list of names, or of { name, pricing } where the provider
- * publishes prices. Held in the second shape either way.
+ * A listing is a list of names, or of { name, … } where it says more about a
+ * model: its price, or how it thinks. Held in the second shape either way.
  */
 const toEntry = (model) => (typeof model === 'string' ? { name: model } : model);
 
@@ -112,7 +112,9 @@ export async function listAll() {
 }
 
 /**
- * Can we send a request to this exact model id right now?
+ * Can we send a request to this exact model id right now? If so, with what
+ * the listing said about it, which is how an adapter knows whether a model
+ * can be asked to think.
  *
  * A model missing from a list that loaded fine is a bad request. A model
  * missing because the list itself failed is a different thing entirely — we do
@@ -124,7 +126,8 @@ export async function checkAvailability(id) {
   const provider = getProvider(parsed.provider);
   const { models, error } = await listProvider(provider);
 
-  if (models.some((model) => model.name === parsed.name)) return { ok: true };
+  const model = models.find((entry) => entry.name === parsed.name);
+  if (model) return { ok: true, model };
   if (error) return { ok: false, status: 503, error };
   return {
     ok: false,
