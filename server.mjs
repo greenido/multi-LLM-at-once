@@ -19,9 +19,6 @@ const isProduction = process.env.NODE_ENV === 'production';
 const ollamaUrl = process.env.OLLAMA_URL ?? 'http://localhost:11434';
 const queryTimeoutMs = Number(process.env.QUERY_TIMEOUT_MS ?? 120_000);
 
-// Placeholder for the context
-let context = '';
-
 // Middleware for parsing request body
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -81,30 +78,40 @@ app.get('/api/models', async (req, res) => {
   }
 });
 
-// Route for setting the context
-app.post('/set-context', (req, res) => {
-  context = req.body.context;
-  console.log('== Got Context:', context);
-  res.json({ context });
-});
-
 //
 // One route for every model. The model id arrives in the body and is checked
 // against the registry before it is used in an outbound request.
+//
+// The client owns the conversation and sends it whole on every request, so
+// this server keeps no per-user state and two browser tabs cannot clobber
+// each other's context.
 //
 // The response is newline-delimited JSON so the client can render tokens as
 // they arrive instead of waiting out the whole completion:
 //   {"type":"chunk","text":"..."}   zero or more
 //   {"type":"done"}                 or {"type":"error","error":"..."}
 //
+const ROLES = new Set(['user', 'assistant']);
+
 app.post('/query', async (req, res) => {
-  const { model, query } = req.body ?? {};
+  const { model, messages, system } = req.body ?? {};
 
   if (typeof model !== 'string' || !model.trim()) {
     return res.status(400).json({ error: 'A model id is required.' });
   }
-  if (typeof query !== 'string' || !query.trim()) {
-    return res.status(400).json({ error: 'A query is required.' });
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: 'A non-empty messages array is required.' });
+  }
+  if (messages.some((m) => !ROLES.has(m?.role) || typeof m?.content !== 'string' || !m.content.trim())) {
+    return res.status(400).json({
+      error: 'Every message needs a role of user or assistant and non-empty string content.',
+    });
+  }
+  if (messages.at(-1).role !== 'user') {
+    return res.status(400).json({ error: 'The last message must be from the user.' });
+  }
+  if (system !== undefined && typeof system !== 'string') {
+    return res.status(400).json({ error: 'system must be a string when given.' });
   }
 
   let available;
@@ -119,8 +126,12 @@ app.post('/query', async (req, res) => {
     });
   }
 
-  const prompt = `context: ${context}. ${query}`;
-  console.log(`☀️ Query for ${model}:`, prompt);
+  // The system prompt is a first-class field, not a string glued to the front
+  // of the user's question, so the model weights it as an instruction.
+  const chatMessages = system?.trim()
+    ? [{ role: 'system', content: system.trim() }, ...messages]
+    : messages;
+  console.log(`☀️ ${model}: ${messages.length} message(s), system ${system?.trim() ? 'set' : 'unset'}`);
 
   // A client per request, so aborting this stream leaves other in-flight
   // requests alone.
@@ -144,7 +155,7 @@ app.post('/query', async (req, res) => {
   // missing model is still reported as a normal JSON error with a status.
   let stream;
   try {
-    stream = await client.generate({ model, prompt, stream: true });
+    stream = await client.chat({ model, messages: chatMessages, stream: true });
   } catch (error) {
     clearTimeout(timeout);
     console.error('🚨 Error:', error);
@@ -163,9 +174,10 @@ app.post('/query', async (req, res) => {
   try {
     let characters = 0;
     for await (const part of stream) {
-      if (part.response) {
-        characters += part.response.length;
-        send({ type: 'chunk', text: part.response });
+      const text = part.message?.content;
+      if (text) {
+        characters += text.length;
+        send({ type: 'chunk', text });
       }
     }
     send({ type: 'done' });

@@ -1,11 +1,6 @@
+import Markdown from './Markdown.jsx';
 import { transcriptToText } from '../lib/transcript.js';
 import { formatDuration, useElapsed } from '../lib/duration.js';
-
-const ROLE_STYLES = {
-  user: 'text-slate-500',
-  assistant: 'text-slate-900',
-  error: 'text-red-600',
-};
 
 const ROLE_LABELS = { user: 'Me', assistant: 'AI', error: 'Error' };
 
@@ -50,7 +45,7 @@ export default function ModelPanel({ model, turns, startedAt, onCopy }) {
         ) : (
           <ol className="space-y-4">
             {turns.map((turn, index) => (
-              <li key={index} className="text-sm">
+              <li key={index}>
                 <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                   {ROLE_LABELS[turn.role]}
                   {turn.ms !== undefined && (
@@ -59,17 +54,28 @@ export default function ModelPanel({ model, turns, startedAt, onCopy }) {
                     </span>
                   )}
                 </span>
-                <p
-                  className={`mt-1 font-mono text-[13px] leading-relaxed whitespace-pre-wrap ${ROLE_STYLES[turn.role]}`}
-                >
-                  {turn.text}
-                  {turn.streaming && (
-                    <span
-                      aria-hidden="true"
-                      className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-slate-500 align-text-bottom"
-                    />
-                  )}
-                </p>
+
+                {turn.role === 'assistant' ? (
+                  <div className="mt-1">
+                    <Markdown>{turn.text}</Markdown>
+                    {turn.streaming && (
+                      <span
+                        aria-hidden="true"
+                        className="inline-block h-4 w-[2px] animate-pulse bg-slate-500 align-text-bottom"
+                      />
+                    )}
+                  </div>
+                ) : (
+                  // The question as typed, and errors verbatim — neither is markdown.
+                  <p
+                    className={`mt-1 text-[13px] leading-relaxed whitespace-pre-wrap ${
+                      turn.role === 'error' ? 'font-mono text-red-600' : 'text-slate-500'
+                    }`}
+                  >
+                    {turn.text}
+                  </p>
+                )}
+
                 {turn.note && <p className="mt-1 text-xs text-red-600">{turn.note}</p>}
               </li>
             ))}
