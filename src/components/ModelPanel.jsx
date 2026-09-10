@@ -59,9 +59,18 @@ export default function ModelPanel({ model, turns, startedAt, onCopy }) {
                     </span>
                   )}
                 </span>
-                <p className={`mt-1 font-mono text-[13px] leading-relaxed whitespace-pre-wrap ${ROLE_STYLES[turn.role]}`}>
+                <p
+                  className={`mt-1 font-mono text-[13px] leading-relaxed whitespace-pre-wrap ${ROLE_STYLES[turn.role]}`}
+                >
                   {turn.text}
+                  {turn.streaming && (
+                    <span
+                      aria-hidden="true"
+                      className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-slate-500 align-text-bottom"
+                    />
+                  )}
                 </p>
+                {turn.note && <p className="mt-1 text-xs text-red-600">{turn.note}</p>}
               </li>
             ))}
           </ol>
