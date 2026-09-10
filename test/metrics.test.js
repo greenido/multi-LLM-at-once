@@ -45,6 +45,12 @@ describe('tokensPerSecond', () => {
     const turn = { usage: usage(500, { reasoningTokens: 500 }), ms: 6000, ttftMs: 1000 };
     assert.equal(tokensPerSecond(turn), null);
   });
+
+  it('counts reasoning that streamed, since the clock started with it', () => {
+    // The same 1,100 tokens, but the reasoning streamed from the first second.
+    const turn = { usage: usage(1100, { reasoningTokens: 1000 }), ms: 12000, ttftMs: 1000, reasoning: 'First, …' };
+    assert.equal(tokensPerSecond(turn), 100);
+  });
 });
 
 describe('turnStats', () => {
@@ -54,9 +60,15 @@ describe('turnStats', () => {
       duration: '12.8s',
       load: null,
       firstToken: 'first token 0.8s',
+      thought: null,
       speed: '50 tok/s',
       tokens: `${n(1234)} in · 600 out`,
     });
+  });
+
+  it('says how long a model thought, when its reasoning showed', () => {
+    assert.equal(turnStats({ thinkingMs: 12300 }).thought, 'thought for 12.3s');
+    assert.equal(turnStats({ ms: 900 }).thought, null);
   });
 
   it('keeps a decimal on a slow model rather than rounding it to nothing', () => {
@@ -69,13 +81,20 @@ describe('turnStats', () => {
   });
 
   it('is all nulls for a turn that is still streaming', () => {
-    assert.deepEqual(Object.values(turnStats({ role: 'assistant', text: 'so far' })), [null, null, null, null, null]);
+    assert.ok(Object.values(turnStats({ role: 'assistant', text: 'so far' })).every((stat) => stat === null));
   });
 });
 
 describe('formatTokens', () => {
   it('reads like the panel header', () => {
     assert.equal(formatTokens({ promptTokens: 9, completionTokens: 1234 }), `9 in · ${n(1234)} out`);
+  });
+
+  it('says how much of the output was reasoning, shown or not', () => {
+    assert.equal(
+      formatTokens({ promptTokens: 9, completionTokens: 1234, reasoningTokens: 1000 }),
+      `9 in · ${n(1234)} out (${n(1000)} reasoning)`,
+    );
   });
 });
 

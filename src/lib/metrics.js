@@ -21,29 +21,33 @@ export const NOTABLE_LOAD_MS = 500;
  * Output tokens per second for one answer, or null when there is not enough to
  * go on.
  *
- * Ollama times its own decoding, which beats anything measured from here. For
- * everyone else the clock runs from the first token to the last.
+ * Ollama and Groq time their own decoding, which beats anything measured from
+ * here. For everyone else the clock runs from the first token to the last.
  *
  * Reasoning a model does privately — OpenAI's o-series and GPT-5, Gemini, Grok
  * — is billed as output but is no part of the streamed answer, so it is taken
  * off the count: thousands of hidden tokens divided by the few seconds the
  * visible answer took to stream would make a reasoning model look many times
- * faster than it is.
+ * faster than it is. Reasoning that streamed is different: the clock started
+ * with it, so it counts like the answer.
  */
-export function tokensPerSecond({ usage, ms, ttftMs }) {
+export function tokensPerSecond({ usage, ms, ttftMs, reasoning }) {
   if (!usage?.completionTokens) return null;
   if (usage.evalMs > 0) return usage.completionTokens / (usage.evalMs / 1000);
 
   if (ms === undefined || ttftMs === undefined) return null;
   const streamingMs = ms - ttftMs;
-  const streamedTokens = usage.completionTokens - (usage.reasoningTokens ?? 0);
+  const hidden = reasoning ? 0 : (usage.reasoningTokens ?? 0);
+  const streamedTokens = usage.completionTokens - hidden;
   if (streamingMs < MIN_STREAMING_MS || streamedTokens <= 0) return null;
   return streamedTokens / (streamingMs / 1000);
 }
 
-/** "1,234 in · 567 out" */
-export const formatTokens = ({ promptTokens, completionTokens }) =>
-  `${promptTokens.toLocaleString()} in · ${completionTokens.toLocaleString()} out`;
+/** "1,234 in · 567 out", or "1,234 in · 567 out (500 reasoning)" for a model that reasoned. */
+export const formatTokens = ({ promptTokens, completionTokens, reasoningTokens }) =>
+  `${promptTokens.toLocaleString()} in · ${completionTokens.toLocaleString()} out${
+    reasoningTokens > 0 ? ` (${reasoningTokens.toLocaleString()} reasoning)` : ''
+  }`;
 
 /**
  * What an answer cost in USD: the figure the provider reported, which accounts
@@ -78,6 +82,8 @@ export function turnStats(turn) {
     duration: turn.ms !== undefined ? formatDuration(turn.ms) : null,
     load: loadMs >= NOTABLE_LOAD_MS ? `load ${formatDuration(loadMs)}` : null,
     firstToken: turn.ttftMs !== undefined ? `first token ${formatDuration(turn.ttftMs)}` : null,
+    // From the first of the reasoning to the first of the answer.
+    thought: turn.thinkingMs !== undefined ? `thought for ${formatDuration(turn.thinkingMs)}` : null,
     speed: speed === null ? null : `${speed >= 10 ? Math.round(speed) : speed.toFixed(1)} tok/s`,
     tokens: turn.usage ? formatSpend(turn.usage) : null,
   };

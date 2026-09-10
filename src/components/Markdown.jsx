@@ -19,9 +19,9 @@ const COMPONENTS = {
   a: ({ node, ...props }) => <a target="_blank" rel="noreferrer" {...props} />,
 };
 
-export default function Markdown({ children }) {
+export default function Markdown({ children, className = '' }) {
   return (
-    <div className="prose prose-sm prose-slate max-w-none prose-pre:my-2 prose-pre:bg-slate-100 prose-pre:text-slate-800 prose-headings:mt-3 prose-headings:mb-1 prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-table:my-2">
+    <div className={`prose prose-sm prose-slate max-w-none prose-pre:my-2 prose-pre:bg-slate-100 prose-pre:text-slate-800 prose-headings:mt-3 prose-headings:mb-1 prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-table:my-2 ${className}`}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={COMPONENTS}>
         {children}
       </ReactMarkdown>

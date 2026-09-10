@@ -26,6 +26,7 @@ import { buildMarkdown, downloadText, exportFilename, toMessages } from './lib/t
 
 const SELECTION_KEY = 'multi-llm.selected-models';
 const SYSTEM_KEY = 'multi-llm.system-prompt';
+const THINK_KEY = 'multi-llm.think';
 
 // Tokens can arrive faster than it is worth re-rendering for, so chunks are
 // coalesced into at most one state update per this many milliseconds.
@@ -58,6 +59,8 @@ export default function App() {
   const [dismissed, setDismissed] = useState([]);
 
   const [system, setSystem] = useState(() => load(SYSTEM_KEY, ''));
+  // The Thinking switch: ask models that can reason to do it, and show it.
+  const [think, setThink] = useState(() => load(THINK_KEY, false) === true);
   const [query, setQuery] = useState('');
   const [transcripts, setTranscripts] = useState({});
   // modelId -> timestamp the in-flight request started, or undefined when idle.
@@ -314,6 +317,11 @@ export default function App() {
     save(SYSTEM_KEY, next);
   }
 
+  function updateThink(next) {
+    setThink(next);
+    save(THINK_KEY, next);
+  }
+
   function newChat() {
     stop();
     conversation.current += 1;
@@ -358,19 +366,39 @@ export default function App() {
     appendTurn(model.id, { role: 'assistant', text: '', streaming: true });
 
     let pending = '';
+    let pendingReasoning = '';
     let lastFlush = 0;
-    // When the first token arrived, which splits waiting for a model from
-    // watching it write. Kept even for an answer that fails or is stopped.
+    // When the first token arrived — of reasoning or of the answer — which
+    // splits waiting for a model from watching it write. Kept even for an
+    // answer that fails or is stopped.
     let firstTokenAt;
+    // Reasoning runs from its own first token to the answer's first, or to
+    // the end for a model stopped while it was still thinking.
+    let reasoningAt;
+    let answerAt;
+    const thinkingMs = () => (answerAt ?? Date.now()) - reasoningAt;
     const timings = () => ({
       ms: Date.now() - begunAt,
       ...(firstTokenAt === undefined ? {} : { ttftMs: firstTokenAt - begunAt }),
+      ...(reasoningAt === undefined ? {} : { thinkingMs: thinkingMs() }),
     });
     const flush = () => {
-      if (!pending) return;
+      if (!pending && !pendingReasoning) return;
       const chunk = pending;
+      const thought = pendingReasoning;
       pending = '';
-      patch((last) => ({ text: last.text + chunk }));
+      pendingReasoning = '';
+      patch((last) => ({
+        text: last.text + chunk,
+        ...(thought ? { reasoning: (last.reasoning ?? '') + thought } : {}),
+      }));
+    };
+    const queue = () => {
+      const now = performance.now();
+      if (now - lastFlush >= FLUSH_INTERVAL_MS) {
+        lastFlush = now;
+        flush();
+      }
     };
 
     try {
@@ -378,15 +406,27 @@ export default function App() {
         model: model.id,
         messages,
         system,
+        think,
         signal: controller.signal,
+        onReasoning: (chunk) => {
+          firstTokenAt ??= Date.now();
+          reasoningAt ??= Date.now();
+          pendingReasoning += chunk;
+          queue();
+        },
         onChunk: (chunk) => {
           firstTokenAt ??= Date.now();
-          pending += chunk;
-          const now = performance.now();
-          if (now - lastFlush >= FLUSH_INTERVAL_MS) {
-            lastFlush = now;
-            flush();
+          if (answerAt === undefined) {
+            answerAt = Date.now();
+            // The answer has started, so the thinking is over: the panel folds
+            // it away and says for how long.
+            if (reasoningAt !== undefined) {
+              flush();
+              patch(() => ({ thinkingMs: thinkingMs() }));
+            }
           }
+          pending += chunk;
+          queue();
         },
         onUsage: (usage) => patch(() => ({ usage: withCost(usage, model.pricing) })),
       });
@@ -395,17 +435,21 @@ export default function App() {
     } catch (error) {
       flush();
       const cancelled = error.name === 'AbortError';
-      patch((last) => ({
-        streaming: false,
-        ...timings(),
-        // A cancelled answer keeps whatever streamed in; a failure with no
-        // text at all becomes the error itself.
-        role: cancelled || last.text ? last.role : 'error',
-        text: cancelled
-          ? `${last.text}${last.text ? '\n' : ''}[stopped]`
-          : last.text || error.message,
-        note: !cancelled && last.text ? error.message : undefined,
-      }));
+      patch((last) => {
+        // A cancelled answer keeps whatever streamed in, and so does one that
+        // failed partway — reasoning included. A failure with nothing at all
+        // to show becomes the error itself.
+        const streamed = Boolean(last.text || last.reasoning);
+        return {
+          streaming: false,
+          ...timings(),
+          role: cancelled || streamed ? last.role : 'error',
+          text: cancelled
+            ? `${last.text}${last.text ? '\n' : ''}[stopped]`
+            : streamed ? last.text : error.message,
+          note: !cancelled && streamed ? error.message : undefined,
+        };
+      });
     } finally {
       // In finally, so a throw anywhere above still clears the spinner — but
       // only this request's: the same model may already be answering again.
@@ -519,6 +563,8 @@ export default function App() {
         <ContextBar
           value={system}
           onChange={updateSystem}
+          think={think}
+          onThinkChange={updateThink}
           onClear={newChat}
           canClear={Object.values(transcripts).some((turns) => turns.length > 0)}
           prompts={prompts}

@@ -51,6 +51,12 @@ describe('toSaved', () => {
     assert.deepEqual(saved.transcripts.a[1], { role: 'assistant', text: 'partial', ms: 5 });
   });
 
+  it('keeps the reasoning, and how long it took, with the answer', () => {
+    const thought = answer('Four.', { reasoning: 'Add them.', thinkingMs: 900 });
+    const saved = toSaved({ ...base, transcripts: { a: [user('2 + 2?'), thought] } });
+    assert.deepEqual(saved.transcripts.a[1], thought);
+  });
+
   it('is null while nothing has been asked', () => {
     assert.equal(toSaved({ ...base, transcripts: {} }), null);
   });
