@@ -27,6 +27,10 @@ const PROVIDER_EMOJI = {
   anthropic: '🔶',
   gemini: '✨',
   xai: '🛸',
+  openrouter: '🔀',
+  groq: '⚡',
+  mistral: '🌪️',
+  deepseek: '🐋',
 };
 
 /** Ollama models are grouped by family instead, since they are all local. */
@@ -59,8 +63,16 @@ export function parseModelId(id) {
 }
 
 /** Turn a raw server entry into the shape the UI renders. */
-export function toModel({ id, provider, name }) {
-  return { id, provider, name, label: prettyLabel(name), emoji: emojiFor(provider, name) };
+export function toModel({ id, provider, name, pricing }) {
+  return {
+    id,
+    provider,
+    name,
+    label: prettyLabel(name),
+    emoji: emojiFor(provider, name),
+    // USD per token, where the provider publishes it — OpenRouter does.
+    ...(pricing ? { pricing } : {}),
+  };
 }
 
 export async function fetchModels() {
@@ -79,11 +91,13 @@ export async function fetchModels() {
  * Pick sensible defaults: the familiar models in PREFERRED order, then whatever
  * else is available, capped at two panels so the first render is not
  * overwhelming. PREFERRED is a ranking, so rank by it rather than letting the
- * alphabetical order the providers return decide.
+ * alphabetical order the providers return decide. A reseller names a model
+ * after its maker — "openai/gpt-4o" — so the ranking reads past the slash.
  */
 export function defaultSelection(models) {
   const rank = (model) => {
-    const index = PREFERRED.findIndex((preferred) => model.name.startsWith(preferred));
+    const name = model.name.slice(model.name.lastIndexOf('/') + 1);
+    const index = PREFERRED.findIndex((preferred) => name.startsWith(preferred));
     return index === -1 ? PREFERRED.length : index;
   };
   return [...models]

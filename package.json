@@ -1,7 +1,7 @@
 {
   "name": "multi-LLM-at-once",
   "version": "0.3.0",
-  "description": "Ask several LLMs the same question at once — local Ollama models and the OpenAI, Anthropic, Gemini and Grok APIs — and compare their answers side by side.",
+  "description": "Ask several LLMs the same question at once — local Ollama models; the OpenAI, Anthropic, Gemini, Grok, Groq, Mistral and DeepSeek APIs; hundreds more through OpenRouter — and compare their answers side by side.",
   "type": "module",
   "license": "MIT",
   "author": {

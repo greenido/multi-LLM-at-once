@@ -9,12 +9,26 @@ import { MAX_SELECTED } from '../lib/models.js';
  */
 const COLLAPSED_COUNT = 8;
 
+/** Case-insensitive, anywhere in the name — "sonnet", "70b", "llama-3". */
+const matches = (model, filter) => model.name.toLowerCase().includes(filter.toLowerCase());
+
 export default function ModelPicker({ groups, selected, onToggle }) {
+  const [filter, setFilter] = useState('');
   const atLimit = selected.length >= MAX_SELECTED;
+  const filtering = filter.trim() !== '';
+
+  // Search earns its space once some provider offers more than fit in a row —
+  // OpenRouter alone lists hundreds.
+  const searchable = groups.some((group) => group.models.length > COLLAPSED_COUNT);
+  const shown = filtering
+    ? groups
+        .map((group) => ({ ...group, models: group.models.filter((model) => matches(model, filter.trim())) }))
+        .filter((group) => group.models.length > 0)
+    : groups;
 
   return (
     <div className="flex flex-col gap-1.5">
-      {groups.map((group) => (
+      {shown.map((group) => (
         <ProviderRow
           key={group.id}
           group={group}
@@ -22,22 +36,38 @@ export default function ModelPicker({ groups, selected, onToggle }) {
           atLimit={atLimit}
           onlyOne={selected.length === 1}
           onToggle={onToggle}
+          showAll={filtering}
         />
       ))}
 
-      <span className="text-xs text-slate-400">
-        {selected.length}/{MAX_SELECTED} selected
-      </span>
+      <div className="flex items-center gap-3">
+        <span className="text-xs text-slate-400">
+          {selected.length}/{MAX_SELECTED} selected
+        </span>
+        {searchable && (
+          <input
+            type="search"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            placeholder="Find a model…"
+            aria-label="Find a model"
+            className="w-56 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs outline-none transition placeholder:text-slate-400 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+          />
+        )}
+        {filtering && shown.length === 0 && <span className="text-xs text-slate-400">No model matches that.</span>}
+      </div>
     </div>
   );
 }
 
-function ProviderRow({ group, selected, atLimit, onlyOne, onToggle }) {
+function ProviderRow({ group, selected, atLimit, onlyOne, onToggle, showAll }) {
   const [expanded, setExpanded] = useState(false);
 
-  const visible = expanded
-    ? group.models
-    : group.models.filter((model, index) => index < COLLAPSED_COUNT || selected.includes(model.id));
+  // While searching, every match shows: the point was to find one.
+  const visible =
+    expanded || showAll
+      ? group.models
+      : group.models.filter((model, index) => index < COLLAPSED_COUNT || selected.includes(model.id));
   const hidden = group.models.length - visible.length;
 
   return (
@@ -86,7 +116,7 @@ function ProviderRow({ group, selected, atLimit, onlyOne, onToggle }) {
           +{hidden} more
         </button>
       )}
-      {expanded && group.models.length > COLLAPSED_COUNT && (
+      {expanded && !showAll && group.models.length > COLLAPSED_COUNT && (
         <button
           type="button"
           onClick={() => setExpanded(false)}

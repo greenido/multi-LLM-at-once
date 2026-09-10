@@ -71,7 +71,7 @@ describe('streamQuery', () => {
       streamed([
         frames(
           { type: 'chunk', text: 'hi' },
-          { type: 'usage', promptTokens: 9, completionTokens: 40, reasoningTokens: 30, loadMs: 2100, evalMs: 800 },
+          { type: 'usage', promptTokens: 9, completionTokens: 40, reasoningTokens: 30, loadMs: 2100, evalMs: 800, costUsd: 0.002 },
           { type: 'done' },
         ),
       ]),
@@ -83,7 +83,7 @@ describe('streamQuery', () => {
       onUsage: (usage) => reported.push(usage),
     });
     assert.deepEqual(reported, [
-      { promptTokens: 9, completionTokens: 40, reasoningTokens: 30, loadMs: 2100, evalMs: 800 },
+      { promptTokens: 9, completionTokens: 40, reasoningTokens: 30, loadMs: 2100, evalMs: 800, costUsd: 0.002 },
     ]);
   });
 

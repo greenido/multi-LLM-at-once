@@ -20,6 +20,7 @@ import {
 import { MAX_SELECTED, defaultSelection, fetchModels, groupByProvider } from './lib/models.js';
 import { clearKey, fetchSettings, saveKey, testKey } from './lib/settings.js';
 import { load, save } from './lib/storage.js';
+import { withCost } from './lib/metrics.js';
 import { streamQuery } from './lib/stream.js';
 import { buildMarkdown, downloadText, exportFilename, toMessages } from './lib/transcript.js';
 
@@ -387,7 +388,7 @@ export default function App() {
             flush();
           }
         },
-        onUsage: (usage) => patch(() => ({ usage })),
+        onUsage: (usage) => patch(() => ({ usage: withCost(usage, model.pricing) })),
       });
       flush();
       patch(() => ({ streaming: false, ...timings() }));

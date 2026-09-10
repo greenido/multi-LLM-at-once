@@ -3,7 +3,7 @@
  * { role: 'user' | 'assistant' | 'error', text: string } turns, where an
  * answer also carries whatever was measured about it — see metrics.js.
  */
-import { formatTokens, turnStats } from './metrics.js';
+import { formatSpend, turnStats } from './metrics.js';
 
 /**
  * How many turns of history to send back. A local model's context window is
@@ -37,13 +37,21 @@ export function toMessages(turns) {
 /**
  * Prompt and completion tokens across a transcript. Cloud providers bill by the
  * token, so a running total is worth showing next to a panel that is spending.
+ * Where answers carry a cost, that is totalled too.
  */
 export function totalTokens(turns) {
   return turns.reduce(
-    (total, turn) => ({
-      promptTokens: total.promptTokens + (turn.usage?.promptTokens ?? 0),
-      completionTokens: total.completionTokens + (turn.usage?.completionTokens ?? 0),
-    }),
+    (total, turn) => {
+      const next = {
+        promptTokens: total.promptTokens + (turn.usage?.promptTokens ?? 0),
+        completionTokens: total.completionTokens + (turn.usage?.completionTokens ?? 0),
+      };
+      const cost = turn.usage?.costUsd;
+      if (typeof cost === 'number' || total.costUsd !== undefined) {
+        next.costUsd = (total.costUsd ?? 0) + (typeof cost === 'number' ? cost : 0);
+      }
+      return next;
+    },
     { promptTokens: 0, completionTokens: 0 },
   );
 }
@@ -76,7 +84,7 @@ function turnToMarkdown(turn) {
 export function modelToMarkdown(model, turns) {
   const total = totalTokens(turns);
   const spent = total.promptTokens + total.completionTokens > 0;
-  const heading = `## ${model.emoji} ${model.label}\n\n\`${model.id}\`${spent ? ` · ${formatTokens(total)} in total` : ''}`;
+  const heading = `## ${model.emoji} ${model.label}\n\n\`${model.id}\`${spent ? ` · ${formatSpend(total)} in total` : ''}`;
   if (turns.length === 0) return `${heading}\n\n_Nothing asked yet._`;
   return [heading, ...turns.map(turnToMarkdown)].join('\n\n');
 }
