@@ -7,9 +7,10 @@ import QueryBar from './components/QueryBar.jsx';
 import { MAX_SELECTED, defaultSelection, fetchModels } from './lib/models.js';
 import { load, save } from './lib/storage.js';
 import { streamQuery } from './lib/stream.js';
-import { buildExport, downloadText, exportFilename } from './lib/transcript.js';
+import { buildExport, downloadText, exportFilename, toMessages } from './lib/transcript.js';
 
 const SELECTION_KEY = 'multi-llm.selected-models';
+const SYSTEM_KEY = 'multi-llm.system-prompt';
 
 // Tokens can arrive faster than it is worth re-rendering for, so chunks are
 // coalesced into at most one state update per this many milliseconds.
@@ -29,8 +30,7 @@ export default function App() {
   const [loadingRegistry, setLoadingRegistry] = useState(true);
   const [selectedIds, setSelectedIds] = useState([]);
 
-  const [context, setContext] = useState('');
-  const [contextSaved, setContextSaved] = useState(false);
+  const [system, setSystem] = useState(() => load(SYSTEM_KEY, ''));
   const [query, setQuery] = useState('');
   const [transcripts, setTranscripts] = useState({});
   // modelId -> timestamp the in-flight request started, or undefined when idle.
@@ -104,17 +104,17 @@ export default function App() {
     });
   }
 
-  async function saveContext() {
-    await fetch('/set-context', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ context }),
-    });
-    setContextSaved(true);
-    setTimeout(() => setContextSaved(false), 2000);
+  function updateSystem(next) {
+    setSystem(next);
+    save(SYSTEM_KEY, next);
   }
 
-  async function ask(model, text) {
+  function newChat() {
+    stop();
+    setTranscripts({});
+  }
+
+  async function ask(model, messages) {
     const begunAt = Date.now();
     const controller = new AbortController();
     controllers.current.set(model.id, controller);
@@ -135,7 +135,8 @@ export default function App() {
     try {
       await streamQuery({
         model: model.id,
-        query: text,
+        messages,
+        system,
         signal: controller.signal,
         onChunk: (chunk) => {
           pending += chunk;
@@ -173,11 +174,22 @@ export default function App() {
     const text = query.trim();
     if (!text || selected.length === 0) return;
     setQuery('');
+
+    // Snapshot each panel's history before the new turn is appended, so the
+    // request carries the conversation up to this question. Every model keeps
+    // its own thread — it should only ever see what it said itself.
+    const histories = new Map(
+      selected.map((model) => [
+        model.id,
+        [...toMessages(transcripts[model.id] ?? []), { role: 'user', content: text }],
+      ]),
+    );
+
     selected.forEach((model) => appendTurn(model.id, { role: 'user', text }));
 
     // Every model starts now. Wall time is the slowest model, not the sum of
     // all of them, and one model failing does not hold up the others.
-    await Promise.allSettled(selected.map((model) => ask(model, text)));
+    await Promise.allSettled(selected.map((model) => ask(model, histories.get(model.id))));
   }
 
   function stop() {
@@ -198,7 +210,12 @@ export default function App() {
       />
 
       <main className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col gap-4 p-4">
-        <ContextBar value={context} onChange={setContext} onSave={saveContext} saved={contextSaved} />
+        <ContextBar
+          value={system}
+          onChange={updateSystem}
+          onClear={newChat}
+          canClear={Object.values(transcripts).some((turns) => turns.length > 0)}
+        />
 
         {available.length > 0 && (
           <ModelPicker models={available} selected={selectedIds} onToggle={toggleModel} />

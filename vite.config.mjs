@@ -14,7 +14,6 @@ export default defineConfig({
     proxy: {
       '/api': API,
       '/query': API,
-      '/set-context': API,
     },
   },
   build: { outDir: 'dist' },

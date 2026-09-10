@@ -3,6 +3,24 @@
  * { role: 'user' | 'assistant' | 'error', text: string } turns.
  */
 
+/**
+ * How many turns of history to send back. A local model's context window is
+ * small, and an unbounded transcript would eventually fill it with old turns
+ * and push the actual question out.
+ */
+export const HISTORY_TURNS = 20;
+
+/**
+ * The transcript as Ollama chat messages. Errors are dropped — the model never
+ * said them — and empty turns cannot be sent, so they go too.
+ */
+export function toMessages(turns) {
+  return turns
+    .filter((turn) => turn.role !== 'error' && turn.text.trim())
+    .slice(-HISTORY_TURNS)
+    .map((turn) => ({ role: turn.role, content: turn.text }));
+}
+
 /** Serialize one transcript to the plain-text form used by copy and export. */
 export function transcriptToText(turns) {
   const speaker = { user: 'Me', assistant: 'AI', error: 'Error' };

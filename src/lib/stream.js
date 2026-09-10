@@ -6,11 +6,11 @@
  * rethrows the AbortError when `signal` is aborted so the caller can tell a
  * cancellation apart from a failure.
  */
-export async function streamQuery({ model, query, signal, onChunk }) {
+export async function streamQuery({ model, messages, system, signal, onChunk }) {
   const response = await fetch('/query', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, query }),
+    body: JSON.stringify({ model, messages, system }),
     signal,
   });
 
