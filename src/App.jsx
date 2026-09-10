@@ -4,7 +4,9 @@ import ContextBar from './components/ContextBar.jsx';
 import ModelPanel from './components/ModelPanel.jsx';
 import ModelPicker from './components/ModelPicker.jsx';
 import QueryBar from './components/QueryBar.jsx';
-import { MAX_SELECTED, defaultSelection, fetchModels } from './lib/models.js';
+import SettingsModal from './components/SettingsModal.jsx';
+import { MAX_SELECTED, defaultSelection, fetchModels, groupByProvider } from './lib/models.js';
+import { clearKey, fetchSettings, saveKey, testKey } from './lib/settings.js';
 import { load, save } from './lib/storage.js';
 import { streamQuery } from './lib/stream.js';
 import { buildExport, downloadText, exportFilename, toMessages } from './lib/transcript.js';
@@ -26,9 +28,14 @@ const GRID_COLUMNS = {
 
 export default function App() {
   const [available, setAvailable] = useState([]);
+  const [providers, setProviders] = useState([]);
   const [registryError, setRegistryError] = useState(null);
   const [loadingRegistry, setLoadingRegistry] = useState(true);
   const [selectedIds, setSelectedIds] = useState([]);
+
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [keySettings, setKeySettings] = useState([]);
+  const [dismissed, setDismissed] = useState([]);
 
   const [system, setSystem] = useState(() => load(SYSTEM_KEY, ''));
   const [query, setQuery] = useState('');
@@ -43,35 +50,59 @@ export default function App() {
     () => selectedIds.map((id) => available.find((model) => model.id === id)).filter(Boolean),
     [selectedIds, available],
   );
+  const groups = useMemo(() => groupByProvider(available, providers), [available, providers]);
   const anyRunning = selected.some((model) => startedAt[model.id]);
 
-  const loadRegistry = useCallback(async () => {
-    setLoadingRegistry(true);
+  // A provider that failed and has nothing to offer would otherwise vanish from
+  // the picker without saying why — the usual case being Ollama not running.
+  const warnings = providers.filter(
+    (provider) => provider.error && provider.count === 0 && !dismissed.includes(provider.id),
+  );
+
+  /**
+   * `quiet` refreshes the list without blanking the panels, for when a key
+   * changed and the catalogue needs re-reading underneath a live conversation.
+   */
+  const loadRegistry = useCallback(async ({ quiet = false } = {}) => {
+    if (!quiet) setLoadingRegistry(true);
     setRegistryError(null);
     try {
-      const models = await fetchModels();
+      const { models, providers: found } = await fetchModels();
       setAvailable(models);
+      setProviders(found);
 
-      // Keep a remembered choice only for models that are still installed.
-      const remembered = load(SELECTION_KEY, null);
-      const stillValid = Array.isArray(remembered)
-        ? remembered.filter((id) => models.some((model) => model.id === id))
-        : [];
-      setSelectedIds(stillValid.length > 0 ? stillValid.slice(0, MAX_SELECTED) : defaultSelection(models));
+      // Keep a remembered choice only for models that are still available.
+      setSelectedIds((current) => {
+        const remembered = current.length > 0 ? current : load(SELECTION_KEY, null);
+        const stillValid = Array.isArray(remembered)
+          ? remembered.filter((id) => models.some((model) => model.id === id))
+          : [];
+        return stillValid.length > 0 ? stillValid.slice(0, MAX_SELECTED) : defaultSelection(models);
+      });
     } catch (error) {
       setRegistryError(error.message);
       setAvailable([]);
+      setProviders([]);
       setSelectedIds([]);
     } finally {
-      setLoadingRegistry(false);
+      if (!quiet) setLoadingRegistry(false);
+    }
+  }, []);
+
+  const loadSettings = useCallback(async () => {
+    try {
+      setKeySettings(await fetchSettings());
+    } catch (error) {
+      console.error('Could not read settings:', error);
     }
   }, []);
 
   useEffect(() => {
     loadRegistry();
-  }, [loadRegistry]);
+    loadSettings();
+  }, [loadRegistry, loadSettings]);
 
-  // Leaving the page should not leave requests running against the daemon.
+  // Leaving the page should not leave requests running against a provider.
   useEffect(() => () => {
     controllers.current.forEach((controller) => controller.abort());
     controllers.current.clear();
@@ -114,6 +145,23 @@ export default function App() {
     setTranscripts({});
   }
 
+  //
+  // Settings. A key change can add or remove a whole provider's worth of
+  // models, so the catalogue is re-read quietly afterwards.
+  //
+  function applyProvider(updated) {
+    setKeySettings((prev) => prev.map((provider) => (provider.id === updated.id ? updated : provider)));
+    loadRegistry({ quiet: true });
+  }
+
+  async function handleSaveKey(provider, apiKey) {
+    applyProvider(await saveKey(provider, apiKey));
+  }
+
+  async function handleClearKey(provider) {
+    applyProvider(await clearKey(provider));
+  }
+
   async function ask(model, messages) {
     const begunAt = Date.now();
     const controller = new AbortController();
@@ -146,6 +194,7 @@ export default function App() {
             flush();
           }
         },
+        onUsage: (usage) => patchLastTurn(model.id, () => ({ usage })),
       });
       flush();
       patchLastTurn(model.id, () => ({ streaming: false, ms: Date.now() - begunAt }));
@@ -207,9 +256,31 @@ export default function App() {
       <Navbar
         onExport={() => downloadText(exportFilename(), buildExport(selected, transcripts))}
         onCopyAll={() => copy(buildExport(selected, transcripts))}
+        onOpenSettings={() => {
+          loadSettings();
+          setSettingsOpen(true);
+        }}
       />
 
       <main className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col gap-4 p-4">
+        {warnings.map((provider) => (
+          <div
+            key={provider.id}
+            className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
+          >
+            <span aria-hidden="true">⚠️</span>
+            <span className="flex-1">{provider.error}</span>
+            <button
+              type="button"
+              onClick={() => setDismissed((prev) => [...prev, provider.id])}
+              aria-label={`Dismiss ${provider.label} warning`}
+              className="rounded px-1 text-amber-500 transition hover:text-amber-900"
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+
         <ContextBar
           value={system}
           onChange={updateSystem}
@@ -217,29 +288,28 @@ export default function App() {
           canClear={Object.values(transcripts).some((turns) => turns.length > 0)}
         />
 
-        {available.length > 0 && (
-          <ModelPicker models={available} selected={selectedIds} onToggle={toggleModel} />
+        {groups.length > 0 && (
+          <ModelPicker groups={groups} selected={selectedIds} onToggle={toggleModel} />
         )}
 
         {registryError ? (
-          <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-red-200 bg-red-50 p-8 text-center">
-            <p className="text-sm font-medium text-red-700">{registryError}</p>
-            <p className="max-w-md text-xs text-red-600">
-              Start Ollama and pull at least one model, for example{' '}
-              <code className="rounded bg-red-100 px-1 py-0.5 font-mono">ollama pull llama3</code>.
-            </p>
-            <button
-              type="button"
-              onClick={loadRegistry}
-              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-red-700"
-            >
-              Retry
-            </button>
-          </div>
+          <CenteredNotice
+            tone="error"
+            message={registryError}
+            hint="The API server is not answering. Check that it is running."
+            action={{ label: 'Retry', onClick: () => loadRegistry() }}
+          />
         ) : loadingRegistry ? (
           <div className="flex min-h-0 flex-1 items-center justify-center">
-            <p className="text-sm text-slate-400">Looking for installed models…</p>
+            <p className="text-sm text-slate-400">Looking for available models…</p>
           </div>
+        ) : available.length === 0 ? (
+          <CenteredNotice
+            tone="empty"
+            message="No models available yet."
+            hint="Start Ollama for local models, or add a cloud API key in Settings."
+            action={{ label: 'Open Settings', onClick: () => setSettingsOpen(true) }}
+          />
         ) : (
           <div className={`grid min-h-0 flex-1 gap-4 ${GRID_COLUMNS[selected.length] ?? GRID_COLUMNS[2]}`}>
             {selected.map((model) => (
@@ -263,6 +333,38 @@ export default function App() {
           disabled={selected.length === 0}
         />
       </main>
+
+      <SettingsModal
+        open={settingsOpen}
+        providers={keySettings}
+        onClose={() => setSettingsOpen(false)}
+        onSave={handleSaveKey}
+        onClear={handleClearKey}
+        onTest={testKey}
+      />
+    </div>
+  );
+}
+
+const TONE = {
+  error: 'border-red-200 bg-red-50 text-red-700',
+  empty: 'border-slate-200 bg-slate-50 text-slate-600',
+};
+
+function CenteredNotice({ tone, message, hint, action }) {
+  return (
+    <div
+      className={`flex min-h-0 flex-1 flex-col items-center justify-center gap-3 rounded-xl border p-8 text-center ${TONE[tone]}`}
+    >
+      <p className="text-sm font-medium">{message}</p>
+      <p className="max-w-md text-xs opacity-80">{hint}</p>
+      <button
+        type="button"
+        onClick={action.onClick}
+        className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
+      >
+        {action.label}
+      </button>
     </div>
   );
 }

@@ -49,3 +49,17 @@ export function downloadText(filename, text) {
   link.click();
   URL.revokeObjectURL(url);
 }
+
+/**
+ * Prompt and completion tokens across a transcript. Cloud providers bill by the
+ * token, so a running total is worth showing next to a panel that is spending.
+ */
+export function totalTokens(turns) {
+  return turns.reduce(
+    (total, turn) => ({
+      promptTokens: total.promptTokens + (turn.usage?.promptTokens ?? 0),
+      completionTokens: total.completionTokens + (turn.usage?.completionTokens ?? 0),
+    }),
+    { promptTokens: 0, completionTokens: 0 },
+  );
+}

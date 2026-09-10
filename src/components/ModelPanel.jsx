@@ -1,12 +1,19 @@
 import Markdown from './Markdown.jsx';
-import { transcriptToText } from '../lib/transcript.js';
+import { totalTokens, transcriptToText } from '../lib/transcript.js';
 import { formatDuration, useElapsed } from '../lib/duration.js';
 
 const ROLE_LABELS = { user: 'Me', assistant: 'AI', error: 'Error' };
 
+const formatTokens = ({ promptTokens, completionTokens }) =>
+  `${promptTokens.toLocaleString()} in · ${completionTokens.toLocaleString()} out`;
+
 export default function ModelPanel({ model, turns, startedAt, onCopy }) {
   const elapsed = useElapsed(startedAt);
   const running = Boolean(startedAt);
+
+  // Cloud models bill by the token, so the panel keeps a running total.
+  const total = totalTokens(turns);
+  const spent = total.promptTokens + total.completionTokens > 0;
 
   return (
     <section className="flex min-h-0 flex-col rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -26,6 +33,15 @@ export default function ModelPanel({ model, turns, startedAt, onCopy }) {
               {formatDuration(elapsed)}
             </span>
           </>
+        )}
+
+        {spent && (
+          <span
+            title="Tokens used by this conversation"
+            className="font-mono text-[11px] tabular-nums text-slate-400"
+          >
+            {formatTokens(total)}
+          </span>
         )}
 
         <button
@@ -51,6 +67,11 @@ export default function ModelPanel({ model, turns, startedAt, onCopy }) {
                   {turn.ms !== undefined && (
                     <span className="ml-2 font-mono normal-case tabular-nums text-slate-400">
                       {formatDuration(turn.ms)}
+                    </span>
+                  )}
+                  {turn.usage && (
+                    <span className="ml-2 font-mono normal-case tabular-nums text-slate-300">
+                      {formatTokens(turn.usage)}
                     </span>
                   )}
                 </span>
