@@ -1,7 +1,8 @@
 import GrowingTextarea from './GrowingTextarea.jsx';
+import PromptMenu from './PromptMenu.jsx';
 import { isSubmitKey } from '../lib/keyboard.js';
 
-export default function QueryBar({ value, onChange, onSend, onStop, running, disabled }) {
+export default function QueryBar({ value, onChange, onSend, onStop, running, disabled, prompts, onSavePrompt, onDeletePrompt }) {
   return (
     <div className="flex items-end gap-2">
       <GrowingTextarea
@@ -17,6 +18,15 @@ export default function QueryBar({ value, onChange, onSend, onStop, running, dis
         placeholder="Your request… (Shift+Enter for a new line)"
         aria-label="Your request"
         className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm shadow-sm outline-none transition placeholder:text-slate-400 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
+      />
+      <PromptMenu
+        kind="question"
+        placement="up"
+        prompts={prompts}
+        current={value}
+        onPick={onChange}
+        onSave={(name, text) => onSavePrompt('question', name, text)}
+        onDelete={onDeletePrompt}
       />
       {running ? (
         <button

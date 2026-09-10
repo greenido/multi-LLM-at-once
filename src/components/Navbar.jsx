@@ -6,12 +6,15 @@ const LINKS = [
 const itemClass =
   'rounded-md px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900';
 
-export default function Navbar({ onExport, onCopyAll, onOpenSettings }) {
+export default function Navbar({ onOpenHistory, onExport, onCopyAll, onOpenSettings }) {
   return (
     <header className="border-b border-slate-200 bg-white">
       <nav className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-2 px-4 py-3">
         <span className="mr-auto whitespace-nowrap text-lg font-semibold tracking-tight">⛄️ Multi LLMs Tool</span>
 
+        <button type="button" onClick={onOpenHistory} className={itemClass}>
+          History
+        </button>
         <button type="button" onClick={onExport} className={itemClass}>
           Export
         </button>
