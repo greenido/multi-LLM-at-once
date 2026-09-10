@@ -1,25 +1,32 @@
 {
   "name": "multi-LLM-at-once",
+  "version": "0.2.0",
+  "description": "Ask several local Ollama models the same question at once and compare their answers side by side.",
+  "type": "module",
+  "license": "MIT",
   "author": {
     "name": "Ido",
     "email": "https://ido-green.appspot.com/contact.html"
   },
-  "version": "0.2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/greenido/multi-LLM-at-once.git"
+  },
+  "engines": {
+    "node": ">=20.19"
+  },
   "scripts": {
     "dev": "concurrently -n vite,api -c cyan,magenta \"npm:dev:client\" \"npm:dev:server\"",
     "dev:client": "vite",
     "dev:server": "PORT=3000 node --watch server.mjs",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "NODE_ENV=production node server.mjs"
+    "start": "NODE_ENV=production node server.mjs",
+    "test": "node --test"
   },
   "dependencies": {
-    "axios": "^1.6.8",
-    "ejs": "^3.1.9",
-    "express": "^4.19.2",
-    "langchain": "^0.1.30",
+    "express": "^5.2.1",
     "ollama": "^0.6.3",
-    "path": "^0.12.7",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
