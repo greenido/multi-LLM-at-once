@@ -6,6 +6,8 @@
  *
  * API keys are held server-side in SQLite (see server/keystore.mjs) and are
  * never sent to the browser: the settings routes return a masked hint only.
+ * Saved comparisons and prompts live in a second SQLite file (see
+ * server/historystore.mjs).
  *
  * Development: `npm run dev` runs Vite on :5173 (which proxies these routes)
  *              alongside this server on :3000.
@@ -15,6 +17,17 @@
  * @see https://github.com/ollama/ollama-js
  */
 import express from 'express';
+import {
+  InvalidInput,
+  createPrompt,
+  deleteComparison,
+  deletePrompt,
+  getComparison,
+  isValidId,
+  listComparisons,
+  listPrompts,
+  saveComparison,
+} from './server/historystore.mjs';
 import { deleteKey, getKey, keyStatus, setKey } from './server/keystore.mjs';
 import {
   KEYED_PROVIDERS,
@@ -34,6 +47,10 @@ const port = process.env.PORT ?? 3000;
 const host = process.env.HOST ?? '127.0.0.1';
 const isProduction = process.env.NODE_ENV === 'production';
 const queryTimeoutMs = Number(process.env.QUERY_TIMEOUT_MS ?? 120_000);
+
+// A saved comparison is every model's whole conversation, so it gets more room
+// than a query does. Mounted first: a body read here is not read again below.
+app.use('/api/comparisons', express.json({ limit: '10mb' }));
 
 // A transcript of twenty turns is bigger than the 100kb default.
 //
@@ -189,6 +206,75 @@ app.post('/api/settings/:provider/test', async (req, res) => {
   } catch (error) {
     res.json({ ok: false, error: error.message });
   }
+});
+
+//
+// Saved comparisons. The browser saves the conversation it has open each time
+// an exchange finishes, under an id it chose, so saving again is idempotent and
+// two tabs each write their own record.
+//
+/** Resolve :id to a well-formed id, or answer 400 and return null. */
+function idParam(req, res) {
+  if (isValidId(req.params.id)) return req.params.id;
+  res.status(400).json({ error: 'That is not a valid id.' });
+  return null;
+}
+
+/** Run a store write, answering refused input with a 400 rather than a 500. */
+function write(res, work) {
+  try {
+    return work();
+  } catch (error) {
+    if (error instanceof InvalidInput) {
+      res.status(400).json({ error: error.message });
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+app.get('/api/comparisons', (req, res) => {
+  const query = typeof req.query.q === 'string' ? req.query.q : '';
+  res.json({ comparisons: listComparisons({ query }) });
+});
+
+app.get('/api/comparisons/:id', (req, res) => {
+  const id = idParam(req, res);
+  if (!id) return;
+  const comparison = getComparison(id);
+  if (!comparison) return res.status(404).json({ error: 'No saved comparison has that id.' });
+  res.json({ comparison });
+});
+
+app.put('/api/comparisons/:id', (req, res) => {
+  const id = idParam(req, res);
+  if (!id) return;
+  const saved = write(res, () => saveComparison({ ...req.body, id }));
+  if (saved) res.json({ comparison: saved });
+});
+
+app.delete('/api/comparisons/:id', (req, res) => {
+  const id = idParam(req, res);
+  if (!id) return;
+  res.json({ deleted: deleteComparison(id) });
+});
+
+//
+// Saved prompts: named system prompts and questions.
+//
+app.get('/api/prompts', (req, res) => {
+  res.json({ prompts: listPrompts() });
+});
+
+app.post('/api/prompts', (req, res) => {
+  const prompt = write(res, () => createPrompt(req.body ?? {}));
+  if (prompt) res.status(201).json({ prompt });
+});
+
+app.delete('/api/prompts/:id', (req, res) => {
+  const id = idParam(req, res);
+  if (!id) return;
+  res.json({ deleted: deletePrompt(id) });
 });
 
 //
