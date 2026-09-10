@@ -1,7 +1,11 @@
 /**
- * Express API for the Multi LLM tool. It exposes the models Ollama actually
- * has pulled, streams a query's tokens back as they are produced, and in
- * production serves the built React app out of dist/.
+ * Express API for the Multi LLM tool. It exposes every model the user can
+ * actually reach — local Ollama models plus whichever cloud providers have an
+ * API key configured — streams a query's tokens back as they are produced, and
+ * in production serves the built React app out of dist/.
+ *
+ * API keys are held server-side in SQLite (see server/keystore.mjs) and are
+ * never sent to the browser: the settings routes return a masked hint only.
  *
  * Development: `npm run dev` runs Vite on :5173 (which proxies these routes)
  *              alongside this server on :3000.
@@ -10,18 +14,26 @@
  * @author @greenido
  * @see https://github.com/ollama/ollama-js
  */
-import { Ollama } from 'ollama';
 import express from 'express';
+import { deleteKey, getKey, keyStatus, setKey } from './server/keystore.mjs';
+import {
+  KEYED_PROVIDERS,
+  getProvider,
+  invalidate,
+  checkAvailability,
+  listAll,
+  parseModelId,
+  settingsStatus,
+} from './server/registry.mjs';
 
 const app = express();
 const port = process.env.PORT ?? 3000;
 const isProduction = process.env.NODE_ENV === 'production';
-const ollamaUrl = process.env.OLLAMA_URL ?? 'http://localhost:11434';
 const queryTimeoutMs = Number(process.env.QUERY_TIMEOUT_MS ?? 120_000);
 
-// Middleware for parsing request body
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// A transcript of twenty turns is bigger than the 100kb default.
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 // In production the built React bundle is the whole UI. In development Vite
 // serves it instead, so there is nothing to mount here.
@@ -29,58 +41,109 @@ if (isProduction) {
   app.use(express.static('dist'));
 }
 
-/**
- * Turn an Ollama failure into something a user can act on. The raw errors are
- * unhelpful: an unreachable daemon surfaces only as "fetch failed".
- */
-function describeError(error, model) {
-  const message = error?.message ?? String(error);
-  if (/fetch failed|ECONNREFUSED|ENOTFOUND|socket hang up/i.test(message)) {
-    return `Cannot reach Ollama at ${ollamaUrl} — is \`ollama serve\` running?`;
-  }
-  if (model && /not found|no such model|try pulling/i.test(message)) {
-    return `Ollama does not have "${model}" pulled. Run: ollama pull ${model}`;
-  }
-  return message;
-}
-
-//
-// The model registry. Ollama is the source of truth for what can be queried,
-// so the list is read from it rather than hardcoded here, and doubles as the
-// allowlist for /query — a client cannot name a model that is not installed.
-//
-const TAG_TTL_MS = 10_000;
-let tagCache = { at: 0, models: null };
-const registry = new Ollama({ host: ollamaUrl });
-
-async function listModels() {
-  if (tagCache.models && Date.now() - tagCache.at < TAG_TTL_MS) {
-    return tagCache.models;
-  }
-
-  const { models = [] } = await registry.list();
-  const names = models
-    .map((entry) => entry.name)
-    .filter(Boolean)
-    .sort((a, b) => a.localeCompare(b));
-
-  tagCache = { at: Date.now(), models: names };
-  return names;
-}
-
 // Route for listing the models available to query
 app.get('/api/models', async (req, res) => {
   try {
-    res.json({ models: await listModels() });
+    res.json(await listAll());
   } catch (error) {
     console.error('🚨 Could not list models:', error);
-    res.status(503).json({ error: describeError(error) });
+    res.status(503).json({ error: error.message });
   }
 });
 
 //
-// One route for every model. The model id arrives in the body and is checked
-// against the registry before it is used in an outbound request.
+// Settings: which providers have a key, and setting or clearing one.
+//
+// Nothing here ever returns a key. A response says whether one is configured
+// and shows a masked hint ("sk-…4f2a") so a user can tell which key is loaded.
+//
+app.get('/api/settings', (req, res) => {
+  res.json({ providers: settingsStatus() });
+});
+
+/** Resolve :provider to a keyed provider, or answer 404 and return null. */
+function keyedProvider(req, res) {
+  const provider = getProvider(req.params.provider);
+  if (!provider || provider.keyless) {
+    res.status(404).json({
+      error: `Unknown provider "${req.params.provider}". Expected one of: ${KEYED_PROVIDERS.map((p) => p.id).join(', ')}`,
+    });
+    return null;
+  }
+  return provider;
+}
+
+/**
+ * A key is opaque, so the only checks worth making are structural. The
+ * printable-ASCII rule matters: these values are used as HTTP header values,
+ * and a newline in one is a header injection.
+ */
+function validateKey(apiKey) {
+  if (typeof apiKey !== 'string') return 'An apiKey string is required.';
+  const trimmed = apiKey.trim();
+  if (!trimmed) return 'The API key cannot be empty.';
+  if (trimmed.length > 512) return 'That does not look like an API key — it is over 512 characters.';
+  if (!/^[\x21-\x7e]+$/.test(trimmed)) {
+    return 'The API key contains spaces or control characters. Check it was pasted whole.';
+  }
+  return null;
+}
+
+app.put('/api/settings/:provider', (req, res) => {
+  const provider = keyedProvider(req, res);
+  if (!provider) return;
+
+  const apiKey = req.body?.apiKey;
+  const problem = validateKey(apiKey);
+  if (problem) return res.status(400).json({ error: problem });
+
+  setKey(provider.id, apiKey.trim());
+  invalidate(provider.id);
+  console.log(`🔑 ${provider.label}: key saved`);
+  res.json({ provider: { id: provider.id, label: provider.label, ...keyStatus(provider.id) } });
+});
+
+app.delete('/api/settings/:provider', (req, res) => {
+  const provider = keyedProvider(req, res);
+  if (!provider) return;
+
+  const removed = deleteKey(provider.id);
+  invalidate(provider.id);
+  if (removed) console.log(`🔑 ${provider.label}: key removed`);
+  res.json({ provider: { id: provider.id, label: provider.label, ...keyStatus(provider.id) } });
+});
+
+/**
+ * Check a key actually works, by asking the provider for its model list. Takes
+ * a key in the body so the modal can test before saving, and falls back to the
+ * stored one so a saved key can be re-checked later.
+ */
+app.post('/api/settings/:provider/test', async (req, res) => {
+  const provider = keyedProvider(req, res);
+  if (!provider) return;
+
+  let apiKey = req.body?.apiKey;
+  if (apiKey === undefined || apiKey === '') {
+    apiKey = getKey(provider.id);
+    if (!apiKey) return res.status(400).json({ error: `No key is set for ${provider.label}.` });
+  } else {
+    const problem = validateKey(apiKey);
+    if (problem) return res.status(400).json({ error: problem });
+    apiKey = apiKey.trim();
+  }
+
+  try {
+    const models = await provider.listModels(apiKey);
+    res.json({ ok: true, count: models.length });
+  } catch (error) {
+    res.json({ ok: false, error: error.message });
+  }
+});
+
+//
+// One route for every model, local or cloud. The model id arrives in the body
+// as "provider:name" and is checked against the registry before it is used in
+// an outbound request.
 //
 // The client owns the conversation and sends it whole on every request, so
 // this server keeps no per-user state and two browser tabs cannot clobber
@@ -88,7 +151,8 @@ app.get('/api/models', async (req, res) => {
 //
 // The response is newline-delimited JSON so the client can render tokens as
 // they arrive instead of waiting out the whole completion:
-//   {"type":"chunk","text":"..."}   zero or more
+//   {"type":"chunk","text":"..."}                          zero or more
+//   {"type":"usage","promptTokens":9,"completionTokens":4}  at most one
 //   {"type":"done"}                 or {"type":"error","error":"..."}
 //
 const ROLES = new Set(['user', 'assistant']);
@@ -114,52 +178,65 @@ app.post('/query', async (req, res) => {
     return res.status(400).json({ error: 'system must be a string when given.' });
   }
 
-  let available;
-  try {
-    available = await listModels();
-  } catch (error) {
-    return res.status(503).json({ error: describeError(error) });
+  const parsed = parseModelId(model);
+  if (!parsed) {
+    return res.status(400).json({ error: `"${model}" is not a known model id. Expected "provider:model".` });
   }
-  if (!available.includes(model)) {
-    return res.status(400).json({
-      error: `"${model}" is not installed. Available: ${available.join(', ') || '(none)'}`,
-    });
+  const provider = getProvider(parsed.provider);
+
+  const key = provider.keyless ? null : getKey(provider.id);
+  if (!provider.keyless && !key) {
+    return res.status(400).json({ error: `No API key is set for ${provider.label}. Add one in Settings.` });
   }
 
-  // The system prompt is a first-class field, not a string glued to the front
-  // of the user's question, so the model weights it as an instruction.
-  const chatMessages = system?.trim()
-    ? [{ role: 'system', content: system.trim() }, ...messages]
-    : messages;
-  console.log(`☀️ ${model}: ${messages.length} message(s), system ${system?.trim() ? 'set' : 'unset'}`);
+  const availability = await checkAvailability(model);
+  if (!availability.ok) {
+    return res.status(availability.status).json({ error: availability.error });
+  }
 
-  // A client per request, so aborting this stream leaves other in-flight
-  // requests alone.
-  const client = new Ollama({ host: ollamaUrl });
+  console.log(
+    `☀️ ${model}: ${messages.length} message(s), system ${system?.trim() ? 'set' : 'unset'}`,
+  );
+
+  // The browser going away, and a model that never finishes, both need to stop
+  // the work rather than leave it running against the provider — a cloud call
+  // left running is also a call still being billed.
+  const controller = new AbortController();
   let cancelled = false;
   const cancel = (reason) => {
     if (cancelled) return;
     cancelled = true;
     console.log(`✋ ${model}: ${reason}`);
-    client.abort();
+    controller.abort();
   };
 
-  // The browser going away, and a model that never finishes, both need to stop
-  // the work rather than leave it running against the daemon.
   res.on('close', () => {
     if (!res.writableEnded) cancel('client disconnected');
   });
   const timeout = setTimeout(() => cancel(`timed out after ${queryTimeoutMs}ms`), queryTimeoutMs);
 
-  // Start the stream before writing headers, so a refused connection or a
-  // missing model is still reported as a normal JSON error with a status.
-  let stream;
+  // Pull the first item before writing headers, so a refused key, an unreachable
+  // provider or a missing model is still reported as a normal JSON error with a
+  // status rather than as a 200 that immediately fails.
+  const stream = provider.chat({
+    key,
+    model: parsed.name,
+    messages,
+    // The system prompt is a first-class field, not a string glued to the front
+    // of the user's question, so the model weights it as an instruction. Each
+    // adapter places it where its own API expects.
+    system: system?.trim() || null,
+    signal: controller.signal,
+  })[Symbol.asyncIterator]();
+
+  let first;
   try {
-    stream = await client.chat({ model, messages: chatMessages, stream: true });
+    first = await stream.next();
   } catch (error) {
     clearTimeout(timeout);
-    console.error('🚨 Error:', error);
-    return res.status(502).json({ error: describeError(error, model) });
+    if (cancelled) return res.end();
+    console.error('🚨 Error:', error.message);
+    return res.status(502).json({ error: error.message });
   }
 
   res.writeHead(200, {
@@ -173,20 +250,25 @@ app.post('/query', async (req, res) => {
 
   try {
     let characters = 0;
-    for await (const part of stream) {
-      const text = part.message?.content;
+    let item = first;
+
+    while (!item.done) {
+      const { text, usage } = item.value;
       if (text) {
         characters += text.length;
         send({ type: 'chunk', text });
       }
+      if (usage) send({ type: 'usage', ...usage });
+      item = await stream.next();
     }
+
     send({ type: 'done' });
     console.log(`== ${model} streamed ${characters} chars`);
   } catch (error) {
     // An abort is expected: either the user cancelled or we timed out.
     if (!cancelled) {
-      console.error('🚨 Error mid-stream:', error);
-      send({ type: 'error', error: describeError(error, model) });
+      console.error('🚨 Error mid-stream:', error.message);
+      send({ type: 'error', error: error.message });
     }
   } finally {
     clearTimeout(timeout);
@@ -199,7 +281,12 @@ app.post('/query', async (req, res) => {
 //
 app.listen(port, () => {
   console.log(`🥥 API running at: http://localhost:${port}`);
-  console.log(`🦙 Talking to Ollama at: ${ollamaUrl}`);
+  const configured = settingsStatus().filter((provider) => provider.configured);
+  console.log(
+    configured.length > 0
+      ? `🔑 Cloud providers ready: ${configured.map((p) => p.label).join(', ')}`
+      : '🔑 No cloud providers configured yet — add a key in Settings.',
+  );
   if (!isProduction) {
     console.log('🍋 UI dev server: http://localhost:5173');
   }

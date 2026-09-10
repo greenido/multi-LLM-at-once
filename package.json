@@ -1,7 +1,7 @@
 {
   "name": "multi-LLM-at-once",
-  "version": "0.2.0",
-  "description": "Ask several local Ollama models the same question at once and compare their answers side by side.",
+  "version": "0.3.0",
+  "description": "Ask several LLMs the same question at once — local Ollama models and the OpenAI, Anthropic, Gemini and Grok APIs — and compare their answers side by side.",
   "type": "module",
   "license": "MIT",
   "author": {
@@ -13,7 +13,7 @@
     "url": "git+https://github.com/greenido/multi-LLM-at-once.git"
   },
   "engines": {
-    "node": ">=20.19"
+    "node": ">=22.13"
   },
   "scripts": {
     "dev": "concurrently -n vite,api -c cyan,magenta \"npm:dev:client\" \"npm:dev:server\"",
