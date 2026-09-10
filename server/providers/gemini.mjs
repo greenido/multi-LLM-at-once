@@ -77,6 +77,9 @@ export const gemini = {
     if (!response.ok) throw new Error(await describeResponseError(response, LABEL));
 
     // Usage is repeated on every frame as a running total, so the last one wins.
+    // A thinking model's reasoning is counted apart from the answer, in
+    // thoughtsTokenCount, but billed as output all the same — so it is added
+    // in, or Gemini would look cheaper than it is next to the others.
     let usage = null;
 
     for await (const payload of sseEvents(response.body)) {
@@ -92,9 +95,11 @@ export const gemini = {
       if (text) yield { text };
 
       if (event.usageMetadata) {
+        const thoughts = event.usageMetadata.thoughtsTokenCount ?? 0;
         usage = {
           promptTokens: event.usageMetadata.promptTokenCount ?? 0,
-          completionTokens: event.usageMetadata.candidatesTokenCount ?? 0,
+          completionTokens: (event.usageMetadata.candidatesTokenCount ?? 0) + thoughts,
+          ...(thoughts > 0 ? { reasoningTokens: thoughts } : {}),
         };
       }
     }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Navbar from './components/Navbar.jsx';
 import ContextBar from './components/ContextBar.jsx';
 import ModelPanel from './components/ModelPanel.jsx';
@@ -9,7 +9,7 @@ import { MAX_SELECTED, defaultSelection, fetchModels, groupByProvider } from './
 import { clearKey, fetchSettings, saveKey, testKey } from './lib/settings.js';
 import { load, save } from './lib/storage.js';
 import { streamQuery } from './lib/stream.js';
-import { buildExport, downloadText, exportFilename, toMessages } from './lib/transcript.js';
+import { buildMarkdown, downloadText, exportFilename, toMessages } from './lib/transcript.js';
 
 const SELECTION_KEY = 'multi-llm.selected-models';
 const SYSTEM_KEY = 'multi-llm.system-prompt';
@@ -177,6 +177,13 @@ export default function App() {
 
     let pending = '';
     let lastFlush = 0;
+    // When the first token arrived, which splits waiting for a model from
+    // watching it write. Kept even for an answer that fails or is stopped.
+    let firstTokenAt;
+    const timings = () => ({
+      ms: Date.now() - begunAt,
+      ...(firstTokenAt === undefined ? {} : { ttftMs: firstTokenAt - begunAt }),
+    });
     const flush = () => {
       if (!pending) return;
       const chunk = pending;
@@ -191,6 +198,7 @@ export default function App() {
         system,
         signal: controller.signal,
         onChunk: (chunk) => {
+          firstTokenAt ??= Date.now();
           pending += chunk;
           const now = performance.now();
           if (now - lastFlush >= FLUSH_INTERVAL_MS) {
@@ -201,13 +209,13 @@ export default function App() {
         onUsage: (usage) => patchLastTurn(model.id, () => ({ usage })),
       });
       flush();
-      patchLastTurn(model.id, () => ({ streaming: false, ms: Date.now() - begunAt }));
+      patchLastTurn(model.id, () => ({ streaming: false, ...timings() }));
     } catch (error) {
       flush();
       const cancelled = error.name === 'AbortError';
       patchLastTurn(model.id, (last) => ({
         streaming: false,
-        ms: Date.now() - begunAt,
+        ...timings(),
         // A cancelled answer keeps whatever streamed in; a failure with no
         // text at all becomes the error itself.
         role: cancelled || last.text ? last.role : 'error',
@@ -245,6 +253,29 @@ export default function App() {
     await Promise.allSettled(selected.map((model) => ask(model, histories.get(model.id))));
   }
 
+  /**
+   * Ask one model its last question again, in place of the answer it gave —
+   * after a rate limit, a timeout or a stopped answer, or for a second try. The
+   * panels beside it are left alone, and are not billed a second time.
+   */
+  function retry(model) {
+    const turns = transcripts[model.id] ?? [];
+    const question = turns.findLastIndex((turn) => turn.role === 'user');
+    if (question === -1 || startedAt[model.id]) return;
+
+    const kept = turns.slice(0, question + 1);
+    setTranscripts((prev) => ({ ...prev, [model.id]: kept }));
+    ask(model, toMessages(kept));
+  }
+
+  // Panels are memoized, so a handler passed to one has to keep its identity
+  // from render to render, yet still see the latest transcripts when it runs.
+  const latestRetry = useRef(retry);
+  useLayoutEffect(() => {
+    latestRetry.current = retry;
+  });
+  const onRetry = useCallback((model) => latestRetry.current(model), []);
+
   function stop() {
     controllers.current.forEach((controller) => controller.abort());
   }
@@ -259,8 +290,8 @@ export default function App() {
   return (
     <div className="flex h-full flex-col">
       <Navbar
-        onExport={() => downloadText(exportFilename(), buildExport(selected, transcripts))}
-        onCopyAll={() => copy(buildExport(selected, transcripts))}
+        onExport={() => downloadText(exportFilename(), buildMarkdown(selected, transcripts, system))}
+        onCopyAll={() => copy(buildMarkdown(selected, transcripts, system))}
         onOpenSettings={() => {
           loadSettings();
           setSettingsOpen(true);
@@ -324,6 +355,7 @@ export default function App() {
                 turns={transcripts[model.id] ?? NO_TURNS}
                 startedAt={startedAt[model.id]}
                 onCopy={copy}
+                onRetry={onRetry}
               />
             ))}
           </div>

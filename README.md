@@ -28,21 +28,34 @@ https://greenido.wordpress.com/2024/04/08/the-power-of-many-why-you-should-consi
   fails, the row falls back to a curated list for that provider and flags
   itself as possibly incomplete rather than going empty.
 - **Token counts per answer** and a running total per panel, because cloud
-  models bill by the token and local ones do not.
-- **Streams as it generates,** with a live timer per model and a final duration
-  on every answer — the numbers you actually want when comparing models.
+  models bill by the token and local ones do not. Reasoning a model does
+  privately is counted too, since it is billed as output.
+- **Streams as it generates,** with a live timer per model. Every answer then
+  shows the numbers worth comparing: total time, **time to the first token**,
+  and **tokens per second** once it started writing — so a model that is slow
+  to start is not mistaken for one that is slow to write. Speed leaves out
+  hidden reasoning tokens, which never stream, and a local model's speed is
+  Ollama's own measurement. A **cold load** of a local model — the weights
+  coming off disk — is shown on its own rather than counted against it.
 - **Panels follow their own output** while it streams, so four models can be
   watched at once without scrolling four boxes by hand. Scroll one up to
   re-read an earlier answer and it stays where you put it until the next
   question.
 - **Stop** abandons a run and keeps whatever streamed in so far.
+- **Retry one panel.** A model that hit a rate limit, timed out or was stopped
+  can be asked its last question again on its own. The panels beside it are
+  not re-asked, and not billed again.
+- **Multi-line prompts.** Paste code or a long question as it is: Enter sends,
+  Shift+Enter starts a new line. The box grows with what you type.
 - **A real conversation per model.** Follow-up questions work, and each model
   only ever sees its own thread.
 - **A system prompt** applied to every model, so you compare them under the
   same instruction. It and your model selection are remembered across reloads;
   **New chat** clears every panel without touching either.
 - Answers render as markdown — tables, fenced code and lists read as
-  themselves. Copy and export give you the raw text.
+  themselves. **Export** and **Copy** give you a Markdown document: the system
+  prompt, each model's exact id, every answer as written, and the timings and
+  token counts next to it.
 
 ## Requirements
 
@@ -129,14 +142,17 @@ override a deployment default without restarting.
 npm test
 ```
 
-Unit tests cover the transcript and history logic, the model registry, the
-streaming NDJSON parser, the SSE reader, the key store, the storage wrapper and
-the stick-to-bottom rule the panels scroll by.
+Unit tests cover the transcript and history logic, the Markdown export, the
+timing and speed metrics, the model registry, the streaming NDJSON parser, the
+SSE reader, the key store, the storage wrapper, the stick-to-bottom rule the
+panels scroll by and the Enter-to-send rule the prompt box follows.
 
-`providers.test.js` stands a stub in front of the four cloud adapters that
-answers in each provider's real wire format, and asserts both directions: that
-their frames parse, and that the API key, the system prompt and the history go
-where each API expects them. The server tests boot the real server and cover
+`providers.test.js` stands a stub in front of the adapters that answers in
+each provider's real wire format — Ollama's included — and asserts both
+directions: that their frames parse, and that the API key, the system prompt
+and the history go where each API expects them. It also pins down how each
+provider reports a reasoning model's hidden tokens, which three of them do in
+three different ways. The server tests boot the real server and cover
 request validation, the settings routes, the unreachable-provider paths and the
 cross-site requests that must not reach a provider.
 
@@ -183,9 +199,10 @@ All optional.
 index.html            Vite entry
 src/App.jsx           state: models, selection, transcripts, in-flight requests
 src/components/       Navbar, ContextBar, ModelPicker, ModelPanel, QueryBar,
-                      SettingsModal, Markdown
-src/lib/              models (catalogue), settings (keys), transcript (history),
-                      stream (NDJSON), duration, storage, scroll (stick-to-bottom)
+                      GrowingTextarea, SettingsModal, Markdown
+src/lib/              models (catalogue), settings (keys), transcript (history,
+                      export), metrics (timings, speed), stream (NDJSON),
+                      duration, storage, scroll (stick-to-bottom), keyboard
 server.mjs            Express API and routing
 server/keystore.mjs   API keys in SQLite, masked on the way out
 server/registry.mjs   every provider's models under one namespaced list
@@ -228,6 +245,11 @@ newline-delimited JSON:
 {"type":"done"}                  or {"type":"error","error":"..."}
 ```
 
+`completionTokens` is everything the model wrote, reasoning included. A usage
+event can also carry `reasoningTokens` — how much of that was reasoning — and,
+from Ollama, `loadMs` and `evalMs`: how long the model took to load and to
+decode.
+
 The settings routes are `GET /api/settings`, `PUT`/`DELETE
 /api/settings/:provider` and `POST /api/settings/:provider/test`. None of them
 returns a key.
@@ -241,7 +263,7 @@ returns a key.
 - [x] Keep conversation history so follow-ups work
 - [ ] Add more query options / pre-defined queries
 - [ ] Save and reload past comparisons
-- [ ] Show tokens/sec alongside the wall-clock timer
+- [x] Show tokens/sec alongside the wall-clock timer
 - [ ] Allow to leverage [llama_index](https://github.com/run-llama/llama_index)
 
 ## License

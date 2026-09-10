@@ -4,6 +4,7 @@ import { after, before, describe, it } from 'node:test';
 
 import { anthropic } from '../server/providers/anthropic.mjs';
 import { gemini } from '../server/providers/gemini.mjs';
+import { ollama } from '../server/providers/ollama.mjs';
 import { openai, xai } from '../server/providers/openai.mjs';
 
 /**
@@ -39,8 +40,10 @@ before(async () => {
     const [, segment, ...rest] = url.pathname.split('/');
     const path = `/${rest.join('/')}`;
     // openai-401 and openai-stall are the same dialect on a route that
-    // misbehaves, so a test can point a base URL at one.
-    const dialect = segment.replace(/-(401|stall)$/, '');
+    // misbehaves, so a test can point a base URL at one; openai-reasoning
+    // answers as a reasoning model would.
+    const dialect = segment.replace(/-(401|stall|reasoning)$/, '');
+    const reasoning = segment.endsWith('-reasoning');
 
     if (segment.endsWith('-401')) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -78,6 +81,26 @@ before(async () => {
 
     const body = await readBody(req);
     seen = { headers: req.headers, body, path, query: url.search };
+
+    // Ollama streams newline-delimited JSON rather than SSE, and times itself
+    // in nanoseconds on the final line.
+    if (dialect === 'ollama') {
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+      const line = (value) => `${JSON.stringify({ model: 'test-model', ...value })}\n`;
+      return res.end([
+        line({ message: { role: 'assistant', content: 'Hello ' }, done: false }),
+        line({ message: { role: 'assistant', content: 'there' }, done: false }),
+        line({
+          message: { role: 'assistant', content: '' },
+          done: true,
+          prompt_eval_count: 111,
+          eval_count: 222,
+          load_duration: 2_100_000_000,
+          eval_duration: 800_000_000,
+        }),
+      ].join(''));
+    }
+
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
 
     // A stream that never ends, for the cancellation test.
@@ -103,16 +126,28 @@ before(async () => {
     }
 
     if (dialect === 'gemini') {
+      const usageMetadata = { promptTokenCount: 111, candidatesTokenCount: 222 };
+      // A thinking model's reasoning is counted apart from its answer.
+      if (reasoning) usageMetadata.thoughtsTokenCount = 1000;
       return res.end(sse([
         `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: 'Hello ' }, { text: 'there' }] } }] })}`,
-        `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: '' }] } }], usageMetadata: { promptTokenCount: 111, candidatesTokenCount: 222 } })}`,
+        `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: '' }] } }], usageMetadata })}`,
       ]));
+    }
+
+    // OpenAI counts reasoning inside completion_tokens; Grok beside it.
+    let usage = { prompt_tokens: 111, completion_tokens: 222 };
+    if (reasoning && dialect === 'openai') {
+      usage = { prompt_tokens: 111, completion_tokens: 1222, total_tokens: 1333, completion_tokens_details: { reasoning_tokens: 1000 } };
+    }
+    if (reasoning && dialect === 'xai') {
+      usage = { prompt_tokens: 111, completion_tokens: 222, total_tokens: 1333, completion_tokens_details: { reasoning_tokens: 1000 } };
     }
 
     return res.end(sse([
       `data: ${JSON.stringify({ choices: [{ delta: { content: 'Hello ' } }] })}`,
       `data: ${JSON.stringify({ choices: [{ delta: { content: 'there' } }] })}`,
-      `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 111, completion_tokens: 222 } })}`,
+      `data: ${JSON.stringify({ choices: [], usage })}`,
       'data: [DONE]',
     ]));
   });
@@ -123,6 +158,7 @@ before(async () => {
   process.env.ANTHROPIC_BASE_URL = `${base}/anthropic`;
   process.env.GEMINI_BASE_URL = `${base}/gemini`;
   process.env.XAI_BASE_URL = `${base}/xai`;
+  process.env.OLLAMA_URL = `${base}/ollama`;
 });
 
 after(() => server?.close());
@@ -205,6 +241,50 @@ describe('streaming an answer', () => {
   it('Gemini joins several parts within one frame', async () => {
     const { text } = await drain(gemini);
     assert.equal(text, 'Hello there');
+  });
+
+  it('Ollama yields the text, the token counts and its own timings, in milliseconds', async () => {
+    const { text, usage } = await drain(ollama);
+    assert.equal(text, 'Hello there');
+    assert.deepEqual(usage, { promptTokens: 111, completionTokens: 222, loadMs: 2100, evalMs: 800 });
+  });
+});
+
+/**
+ * A reasoning model's hidden tokens are billed as output, but each provider
+ * reports them differently. Normalised, completionTokens is everything the
+ * model wrote and reasoningTokens is how much of it was reasoning — which is
+ * what lets tokens per second leave out the part that never streamed.
+ */
+describe('counting reasoning tokens', () => {
+  const REASONED = { promptTokens: 111, completionTokens: 1222, reasoningTokens: 1000 };
+
+  /** Point a provider's base URL at the stub's reasoning variant for one drain. */
+  async function drainReasoning(provider, envVar) {
+    const saved = process.env[envVar];
+    process.env[envVar] = `${saved}-reasoning`;
+    try {
+      return await drain(provider);
+    } finally {
+      process.env[envVar] = saved;
+    }
+  }
+
+  it('OpenAI already counts them inside completion_tokens', async () => {
+    assert.deepEqual((await drainReasoning(openai, 'OPENAI_BASE_URL')).usage, REASONED);
+  });
+
+  it('Grok counts them beside it, so they are added in', async () => {
+    assert.deepEqual((await drainReasoning(xai, 'XAI_BASE_URL')).usage, REASONED);
+  });
+
+  it('Gemini counts them in thoughtsTokenCount, so they are added in', async () => {
+    assert.deepEqual((await drainReasoning(gemini, 'GEMINI_BASE_URL')).usage, REASONED);
+  });
+
+  it('reports no reasoning at all for a model that did none', async () => {
+    const { usage } = await drain(openai);
+    assert.equal('reasoningTokens' in usage, false);
   });
 });
 

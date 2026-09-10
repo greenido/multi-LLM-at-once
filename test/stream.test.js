@@ -65,6 +65,42 @@ describe('streamQuery', () => {
     assert.deepEqual(chunks, ['one ', 'two']);
   });
 
+  it('reports the token counts, with whatever else the provider measured', async () => {
+    const reported = [];
+    stubFetch(() =>
+      streamed([
+        frames(
+          { type: 'chunk', text: 'hi' },
+          { type: 'usage', promptTokens: 9, completionTokens: 40, reasoningTokens: 30, loadMs: 2100, evalMs: 800 },
+          { type: 'done' },
+        ),
+      ]),
+    );
+    await streamQuery({
+      model: 'm',
+      messages: [{ role: 'user', content: 'x' }],
+      onChunk: () => {},
+      onUsage: (usage) => reported.push(usage),
+    });
+    assert.deepEqual(reported, [
+      { promptTokens: 9, completionTokens: 40, reasoningTokens: 30, loadMs: 2100, evalMs: 800 },
+    ]);
+  });
+
+  it('passes on only the fields it knows, and only as numbers', async () => {
+    const reported = [];
+    stubFetch(() =>
+      streamed([frames({ type: 'usage', promptTokens: 1, completionTokens: 2, loadMs: 'soon', extra: 5 }, { type: 'done' })]),
+    );
+    await streamQuery({
+      model: 'm',
+      messages: [{ role: 'user', content: 'x' }],
+      onChunk: () => {},
+      onUsage: (usage) => reported.push(usage),
+    });
+    assert.deepEqual(reported, [{ promptTokens: 1, completionTokens: 2 }]);
+  });
+
   it('reassembles a frame split across reads', async () => {
     // The classic streaming bug: a JSON object arriving in two TCP reads.
     const whole = frames({ type: 'chunk', text: 'split me' }, { type: 'done' });

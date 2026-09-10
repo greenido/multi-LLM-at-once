@@ -26,6 +26,8 @@ export function describeOllamaError(error, model) {
   return message;
 }
 
+const nanosToMs = (field, nanos) => (nanos > 0 ? { [field]: Math.round(nanos / 1e6) } : {});
+
 export const ollama = {
   id: 'ollama',
   label: LABEL,
@@ -67,6 +69,11 @@ export const ollama = {
             usage: {
               promptTokens: part.prompt_eval_count ?? 0,
               completionTokens: part.eval_count ?? 0,
+              // Ollama times itself, in nanoseconds. Decode time gives an exact
+              // speed, and load time separates a cold start — the weights coming
+              // off disk — from the model actually being slow.
+              ...nanosToMs('loadMs', part.load_duration),
+              ...nanosToMs('evalMs', part.eval_duration),
             },
           };
         }

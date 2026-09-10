@@ -1,13 +1,14 @@
 import { memo, useCallback, useEffect, useRef } from 'react';
 import Markdown from './Markdown.jsx';
-import { totalTokens, transcriptToText } from '../lib/transcript.js';
+import { modelToMarkdown, totalTokens } from '../lib/transcript.js';
 import { formatDuration, useElapsed } from '../lib/duration.js';
+import { formatTokens, turnStats } from '../lib/metrics.js';
 import { isAtBottom } from '../lib/scroll.js';
 
 const ROLE_LABELS = { user: 'Me', assistant: 'AI', error: 'Error' };
 
-const formatTokens = ({ promptTokens, completionTokens }) =>
-  `${promptTokens.toLocaleString()} in · ${completionTokens.toLocaleString()} out`;
+const TIMING_HELP =
+  'Total time · model load (a cold local model only) · time to the first token · output speed once it started';
 
 /**
  * The live timer ticks ten times a second. On its own that would re-render the
@@ -35,19 +36,20 @@ function ElapsedTime({ startedAt, label }) {
  * and react-markdown does not re-parse an answer that has not changed.
  */
 const Turn = memo(function Turn({ turn }) {
+  const { duration, load, firstToken, speed, tokens } = turnStats(turn);
+  const timing = [duration, load, firstToken, speed].filter(Boolean).join(' · ');
+
   return (
     <li>
       <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
         {ROLE_LABELS[turn.role]}
-        {turn.ms !== undefined && (
-          <span className="ml-2 font-mono normal-case tabular-nums text-slate-400">
-            {formatDuration(turn.ms)}
+        {timing && (
+          <span title={TIMING_HELP} className="ml-2 font-mono normal-case tabular-nums text-slate-400">
+            {timing}
           </span>
         )}
-        {turn.usage && (
-          <span className="ml-2 font-mono normal-case tabular-nums text-slate-300">
-            {formatTokens(turn.usage)}
-          </span>
+        {tokens && (
+          <span className="ml-2 font-mono normal-case tabular-nums text-slate-300">{tokens}</span>
         )}
       </span>
 
@@ -77,8 +79,9 @@ const Turn = memo(function Turn({ turn }) {
   );
 });
 
-function ModelPanel({ model, turns, startedAt, onCopy }) {
+function ModelPanel({ model, turns, startedAt, onCopy, onRetry }) {
   const running = Boolean(startedAt);
+  const asked = turns.some((turn) => turn.role === 'user');
 
   // Cloud models bill by the token, so the panel keeps a running total.
   const total = totalTokens(turns);
@@ -127,10 +130,20 @@ function ModelPanel({ model, turns, startedAt, onCopy }) {
 
         <button
           type="button"
-          onClick={() => onCopy(transcriptToText(turns))}
-          disabled={turns.length === 0}
-          title="Copy to clipboard"
+          onClick={() => onRetry(model)}
+          disabled={running || !asked}
+          title={`Ask ${model.label} the last question again, replacing its answer. The other panels are not re-asked.`}
           className="ml-auto rounded-md px-2 py-1 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Retry
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onCopy(modelToMarkdown(model, turns))}
+          disabled={turns.length === 0}
+          title="Copy this conversation as Markdown"
+          className="rounded-md px-2 py-1 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
         >
           Copy
         </button>
