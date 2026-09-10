@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { rmSync } from 'node:fs';
+import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -34,6 +35,8 @@ before(async () => {
       PORT: String(PORT),
       KEYS_DB: DB,
       HISTORY_DB: HISTORY,
+      HOST: '127.0.0.1',
+      ALLOWED_HOSTS: 'llm.test',
       OLLAMA_URL: 'http://127.0.0.1:1',
       NODE_ENV: 'test',
       // Cloud providers must be unconfigured at the start of the run.
@@ -356,6 +359,42 @@ describe('saved prompts', () => {
     const res = await create({ kind: 'system', name: 'Empty', text: '   ' });
     assert.equal(res.status, 400);
     assert.match((await res.json()).error, /cannot be empty/);
+  });
+});
+
+/**
+ * DNS rebinding: a page can re-point its own name at 127.0.0.1, which makes
+ * this server its origin — the Origin check passes and responses are readable.
+ * The Host header still carries the page's name, so that is what is checked.
+ * fetch will not set Host, so these go through node:http.
+ */
+describe('requests addressed to another name', () => {
+  const statusFor = (hostHeader) =>
+    new Promise((resolve, reject) => {
+      const req = request(
+        { host: '127.0.0.1', port: PORT, path: '/api/comparisons', headers: { Host: hostHeader } },
+        (res) => {
+          res.resume();
+          res.on('end', () => resolve(res.statusCode));
+        },
+      );
+      req.on('error', reject);
+      req.end();
+    });
+
+  it('refuses a name that is not this machine, even for a read', async () => {
+    assert.equal(await statusFor(`evil.example:${PORT}`), 403);
+  });
+
+  it('answers to the loopback names', async () => {
+    assert.equal(await statusFor(`localhost:${PORT}`), 200);
+    assert.equal(await statusFor(`127.0.0.1:${PORT}`), 200);
+    assert.equal(await statusFor(`[::1]:${PORT}`), 200);
+    assert.equal(await statusFor(`app.localhost:${PORT}`), 200);
+  });
+
+  it('answers to a name listed in ALLOWED_HOSTS', async () => {
+    assert.equal(await statusFor(`llm.test:${PORT}`), 200);
   });
 });
 

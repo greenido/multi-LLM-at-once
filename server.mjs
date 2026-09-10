@@ -48,6 +48,48 @@ const host = process.env.HOST ?? '127.0.0.1';
 const isProduction = process.env.NODE_ENV === 'production';
 const queryTimeoutMs = Number(process.env.QUERY_TIMEOUT_MS ?? 120_000);
 
+//
+// DNS rebinding. A page on evil.example can re-point its own name at
+// 127.0.0.1 after it has loaded, and from then on the browser treats this
+// server as that page's own origin: the Origin check below passes, and reads —
+// saved conversations among them — come back readable. The one thing such a
+// page cannot change is the Host header, which still says evil.example. So
+// while the server listens on loopback, it answers only to loopback names.
+//
+// Binding anything else is the opt-in to being reached by other names, and
+// the README asks for an authenticating proxy in front of that.
+//
+const LOOPBACK_BINDS = new Set(['127.0.0.1', 'localhost', '::1']);
+const allowedHosts = new Set([
+  'localhost',
+  '127.0.0.1',
+  '[::1]',
+  ...(process.env.ALLOWED_HOSTS?.split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean) ?? []),
+]);
+
+/** "localhost:5173" -> "localhost"; anything unparseable -> null. */
+function hostnameOf(header) {
+  try {
+    return new URL(`http://${header}`).hostname;
+  } catch {
+    return null;
+  }
+}
+
+app.use((req, res, next) => {
+  if (!LOOPBACK_BINDS.has(host)) return next();
+  const hostname = hostnameOf(req.headers.host ?? '');
+  // *.localhost resolves to loopback in browsers, so it cannot be rebound.
+  if (hostname && (allowedHosts.has(hostname) || hostname.endsWith('.localhost'))) return next();
+
+  console.warn(`⛔️ Refused ${req.method} ${req.path} addressed to ${req.headers.host}`);
+  res.status(403).json({
+    error: 'This server answers only to localhost. Add the name you use to ALLOWED_HOSTS.',
+  });
+});
+
 // A saved comparison is every model's whole conversation, so it gets more room
 // than a query does. Mounted first: a body read here is not read again below.
 app.use('/api/comparisons', express.json({ limit: '10mb' }));
