@@ -1,5 +1,7 @@
 # ⛄️ Multi LLM Tool
 
+[![CI](https://github.com/greenido/multi-LLM-at-once/actions/workflows/ci.yml/badge.svg)](https://github.com/greenido/multi-LLM-at-once/actions/workflows/ci.yml)
+
 Ask several LLMs the same question at once and compare their answers side by
 side — local [Ollama](https://ollama.com) models, the OpenAI, Anthropic, Google
 Gemini and Grok APIs, or a mix of both.
@@ -139,6 +141,24 @@ request validation, the settings routes, the unreachable-provider paths and the
 cross-site requests that must not reach a provider.
 
 No test reaches a real provider, and none needs Ollama running.
+
+### On every push and pull request
+
+`.github/workflows/ci.yml` runs four things, none of which need a secret:
+
+- **the suite, on Node 22.13 and 24.** 22.13 is the floor `package.json`
+  declares, so it is the version that can actually break; `node:sqlite`, which
+  the key store is built on, is still an experimental API, and testing only the
+  newest release would hide the day it changes underneath the floor.
+- **`npm run build`.** There are no component tests, so this is what stands
+  between a broken import and `main`.
+- **`npm audit`,** blocking on high and critical only. Six direct
+  dependencies and no vendor SDKs — keeping this at zero is cheap.
+- **a scan of the added lines for credentials.** This app's whole design is
+  that keys stay out of the browser and out of git, and that is worth
+  enforcing rather than remembering. The patterns match real key shapes
+  narrowly, so the invented fixtures in the suite do not trip it, and it also
+  fails if `data/` or a `.env` is ever force-added.
 
 ## Configuration
 

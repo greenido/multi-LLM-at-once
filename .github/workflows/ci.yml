@@ -1,0 +1,82 @@
+# What has to be true before a change lands.
+#
+# The suite needs no network and no Ollama — the provider adapters are driven
+# by stubs and OLLAMA_URL points at a closed port — so this runs anywhere with
+# no services and no secrets.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A force-push should not leave the previous run burning minutes on a commit
+# nobody is waiting for.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      # One version failing is worth seeing alongside the other passing.
+      fail-fast: false
+      matrix:
+        # 22.13 is the floor package.json declares, so it is the one that can
+        # actually break; 24 is where users are. node:sqlite — which the key
+        # store is built on — is still an experimental API, and pinning only
+        # the newest release would hide the day it changes under the floor.
+        node: ['22.13', '24']
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # ci, not install: it fails when package.json and the lockfile disagree,
+      # which is a thing worth failing on.
+      - run: npm ci
+
+      - run: npm test
+
+  build:
+    name: build and audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      # No component tests, so this is what stands between a broken import or
+      # a malformed JSX file and main.
+      - run: npm run build
+
+      # Six direct dependencies and no vendor SDKs — keeping this at zero is
+      # cheap. Only high and critical block, so a transitive advisory in a dev
+      # tool does not stop a fix from landing.
+      - run: npm audit --audit-level=high
+
+  secrets:
+    name: no secrets committed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Compare against the base branch, so a pull request is judged on
+          # what it adds rather than on the whole history.
+          fetch-depth: 0
+
+      - name: Scan added lines for credentials
+        run: bash .github/scripts/scan-secrets.sh "${{ github.event.pull_request.base.sha || github.event.before }}"
