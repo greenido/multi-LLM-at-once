@@ -3,8 +3,9 @@
 [![CI](https://github.com/greenido/multi-LLM-at-once/actions/workflows/ci.yml/badge.svg)](https://github.com/greenido/multi-LLM-at-once/actions/workflows/ci.yml)
 
 Ask several LLMs the same question at once and compare their answers side by
-side — local [Ollama](https://ollama.com) models, the OpenAI, Anthropic, Google
-Gemini and Grok APIs, or a mix of both.
+side — local [Ollama](https://ollama.com) models; the OpenAI, Anthropic, Google
+Gemini, Grok, Groq, Mistral and DeepSeek APIs; hundreds more through
+[OpenRouter](https://openrouter.ai); or any mix of them.
 
 <img src="images/screenshot-9-9-2026.png" alt="Two Gemini models answering the same question side by side, each panel showing its own token counts and duration">
 
@@ -16,20 +17,27 @@ https://greenido.wordpress.com/2024/04/08/the-power-of-many-why-you-should-consi
 - **Up to four models at once.** They all start together, so you wait for the
   slowest one rather than for the sum of all of them.
 - **Local and cloud, side by side.** Compare a model running on your laptop
-  against GPT, Claude, Gemini or Grok in the same row of panels.
+  against GPT, Claude, Gemini, Grok, Mistral or DeepSeek in the same row of
+  panels — or the same open model on Groq's hardware and your own.
+- **One key for everything else.** OpenRouter puts hundreds of models from
+  every lab behind a single key, and publishes their prices, so its answers
+  show what they cost.
 - **Whatever you actually have.** The model list is read from Ollama and from
   each provider you have a key for, so a newly pulled model or a newly released
   one shows up in the picker with no code change.
 - **A picker that survives a long list.** Models sit in one row per provider,
   and a provider offering dozens of them shows the first few behind a
   `+28 more`. Anything selected stays visible, and pills hold their position
-  so they do not jump under the cursor when a row expands.
+  so they do not jump under the cursor when a row expands. Once a provider
+  offers more than fit in a row, **Find a model** narrows every row to what
+  matches.
 - **A provider that will not answer still works.** If a live model listing
   fails, the row falls back to a curated list for that provider and flags
   itself as possibly incomplete rather than going empty.
 - **Token counts per answer** and a running total per panel, because cloud
   models bill by the token and local ones do not. Reasoning a model does
-  privately is counted too, since it is billed as output.
+  privately is counted too, since it is billed as output. Where the provider
+  publishes prices — OpenRouter — the answer's cost is shown beside them.
 - **Streams as it generates,** with a live timer per model. Every answer then
   shows the numbers worth comparing: total time, **time to the first token**,
   and **tokens per second** once it started writing — so a model that is slow
@@ -72,7 +80,8 @@ https://greenido.wordpress.com/2024/04/08/the-power-of-many-why-you-should-consi
   `node:sqlite` module)
 - At least one of:
   - [Ollama](https://ollama.com) running locally with a model pulled
-  - an API key for OpenAI, Anthropic, Google Gemini or xAI
+  - an API key for OpenAI, Anthropic, Google Gemini, xAI, OpenRouter, Groq,
+    Mistral or DeepSeek
 
 Neither is required on its own. With no Ollama the app runs on cloud models
 alone; with no keys it runs exactly as it did before.
@@ -110,8 +119,9 @@ npm run build && npm start
 ## API keys
 
 Open **Settings** in the top bar and paste a key for any of OpenAI, Anthropic,
-Google Gemini or xAI. **Test** checks it against the provider before you commit
-to it. A provider with no key simply does not appear in the model picker.
+Google Gemini, xAI, OpenRouter, Groq, Mistral or DeepSeek. **Test** checks it
+against the provider before you commit to it. A provider with no key simply
+does not appear in the model picker.
 
 Keys are held **on the server**, not in the browser. The settings API returns
 only a masked hint (`sk-…4f2a`) — a saved key is never sent back to the page.
@@ -147,6 +157,9 @@ decline to delete it:
 OPENAI_API_KEY=… ANTHROPIC_API_KEY=… GEMINI_API_KEY=… XAI_API_KEY=… npm run dev
 ```
 
+The others follow the same pattern: `OPENROUTER_API_KEY`, `GROQ_API_KEY`,
+`MISTRAL_API_KEY`, `DEEPSEEK_API_KEY`.
+
 A key stored through the modal takes precedence over the environment, so you can
 override a deployment default without restarting.
 
@@ -180,7 +193,10 @@ each provider's real wire format — Ollama's included — and asserts both
 directions: that their frames parse, and that the API key, the system prompt
 and the history go where each API expects them. It also pins down how each
 provider reports a reasoning model's hidden tokens, which three of them do in
-three different ways. The server tests boot the real server and cover
+three different ways, and each one's departures from the API it copies.
+`registry.test.js` checks that a published price reaches the catalogue and
+that a priced model can still be asked for. The
+server tests boot the real server and cover
 request validation, the settings, history and prompt routes, the
 unreachable-provider paths, the cross-site requests that must not reach a
 provider, and requests addressed to a name that is not this machine.
@@ -251,11 +267,19 @@ browser picked when it started — so saving again replaces it, and two tabs
 each write their own.
 
 Every provider sits behind one adapter interface — `listModels(key)` and an
-async-generator `chat()` — so the differences between four REST APIs (bearer
+async-generator `chat()` — so the differences between their REST APIs (bearer
 token vs `x-api-key` vs `x-goog-api-key`; the system prompt as a message, a
 top-level field, or a `systemInstruction`; `assistant` vs `model`) stop at that
 boundary. There is no vendor SDK: the wire formats are small and plain
 `fetch` keeps the dependency count at zero.
+
+Six of the providers speak OpenAI's chat completions API and are built from
+one factory. What differs is the base URL and which listed models can chat —
+OpenAI and Grok are filtered by name, Mistral's listing says so itself, Groq
+drops its speech and safety models, OpenRouter keeps the models that write
+text — plus a few departures from the original: Mistral is not sent
+`stream_options`, Groq reports its counts under `x_groq`, and OpenRouter is
+asked for the cost.
 
 Model ids are namespaced `provider:name` — `openai:gpt-4o`,
 `ollama:llama3:latest` — and the catalogue doubles as the allowlist, so a
@@ -270,7 +294,8 @@ error rides along so the UI can say the row may be incomplete.
 
 `GET /api/models` returns `{ models, providers }` — every queryable model,
 and one entry per provider carrying its label, whether it is keyless, whether a
-key is configured, how many models it offered and any listing error.
+key is configured, how many models it offered and any listing error. A model
+whose provider publishes prices carries `pricing`, in USD per token.
 
 `POST /query` takes `{ model, messages, system }` and replies with
 newline-delimited JSON:
@@ -282,9 +307,10 @@ newline-delimited JSON:
 ```
 
 `completionTokens` is everything the model wrote, reasoning included. A usage
-event can also carry `reasoningTokens` — how much of that was reasoning — and,
-from Ollama, `loadMs` and `evalMs`: how long the model took to load and to
-decode.
+event can also carry `reasoningTokens` — how much of that was reasoning;
+`evalMs`, the decoding time, from Ollama and Groq, which measure it
+themselves; `loadMs` from Ollama, how long the model took to load; and
+`costUsd` from OpenRouter, what the answer cost.
 
 The settings routes are `GET /api/settings`, `PUT`/`DELETE
 /api/settings/:provider` and `POST /api/settings/:provider/test`. None of them
