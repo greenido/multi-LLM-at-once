@@ -1,9 +1,10 @@
 /**
  * Optional measurements a usage frame can carry beyond the two token counts:
- * how many of the output tokens were reasoning, and — from Ollama, which times
- * itself — how long the model took to load and to decode.
+ * how many of the output tokens were reasoning; how long the model took to
+ * load and to decode, from providers that time themselves; and what the
+ * answer cost, from one that says.
  */
-const USAGE_EXTRAS = ['reasoningTokens', 'loadMs', 'evalMs'];
+const USAGE_EXTRAS = ['reasoningTokens', 'loadMs', 'evalMs', 'costUsd'];
 
 /**
  * Reads the newline-delimited JSON stream that POST /query returns, calling

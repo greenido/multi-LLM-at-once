@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { NOTABLE_LOAD_MS, formatTokens, tokensPerSecond, turnStats } from '../src/lib/metrics.js';
+import {
+  NOTABLE_LOAD_MS,
+  formatCost,
+  formatSpend,
+  formatTokens,
+  tokensPerSecond,
+  turnStats,
+  withCost,
+} from '../src/lib/metrics.js';
 
 const usage = (completionTokens, extra = {}) => ({ promptTokens: 10, completionTokens, ...extra });
 
@@ -68,5 +76,35 @@ describe('turnStats', () => {
 describe('formatTokens', () => {
   it('reads like the panel header', () => {
     assert.equal(formatTokens({ promptTokens: 9, completionTokens: 1234 }), `9 in · ${n(1234)} out`);
+  });
+});
+
+describe('what an answer cost', () => {
+  const pricing = { prompt: 0.000003, completion: 0.000015 };
+
+  it('works it out from the list price when the provider did not say', () => {
+    const { costUsd } = withCost(usage(200, { promptTokens: 1000 }), pricing);
+    assert.ok(Math.abs(costUsd - (1000 * 0.000003 + 200 * 0.000015)) < 1e-12);
+  });
+
+  it('prefers the cost the provider reported, which knows about caching', () => {
+    assert.equal(withCost(usage(200, { costUsd: 0.0001 }), pricing).costUsd, 0.0001);
+  });
+
+  it('has no cost at all for a provider that publishes no prices', () => {
+    assert.equal('costUsd' in withCost(usage(200), undefined), false);
+  });
+
+  it('keeps four decimals under a dollar, since one answer usually costs less than a cent', () => {
+    assert.equal(formatCost(0.00042), '$0.0004');
+    assert.equal(formatCost(0.0123), '$0.0123');
+    assert.equal(formatCost(1.371), '$1.37');
+    assert.equal(formatCost(0.00001), '<$0.0001');
+    assert.equal(formatCost(0), 'free');
+  });
+
+  it('rides along with the token counts', () => {
+    assert.equal(formatSpend({ promptTokens: 9, completionTokens: 40, costUsd: 0.0012 }), '9 in · 40 out · $0.0012');
+    assert.equal(formatSpend({ promptTokens: 9, completionTokens: 40 }), '9 in · 40 out');
   });
 });

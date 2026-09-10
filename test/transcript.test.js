@@ -70,6 +70,15 @@ describe('totalTokens', () => {
     ]);
     assert.deepEqual(total, { promptTokens: 30, completionTokens: 12 });
   });
+
+  it('totals the cost too, where answers carry one', () => {
+    const total = totalTokens([
+      turn('assistant', 'a', { usage: { promptTokens: 10, completionTokens: 5, costUsd: 0.25 } }),
+      turn('assistant', 'b', { usage: { promptTokens: 20, completionTokens: 7 } }),
+      turn('assistant', 'c', { usage: { promptTokens: 1, completionTokens: 1, costUsd: 0.5 } }),
+    ]);
+    assert.deepEqual(total, { promptTokens: 31, completionTokens: 13, costUsd: 0.75 });
+  });
 });
 
 describe('the markdown export', () => {

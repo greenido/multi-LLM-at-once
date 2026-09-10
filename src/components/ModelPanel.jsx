@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useRef } from 'react';
 import Markdown from './Markdown.jsx';
 import { modelToMarkdown, totalTokens } from '../lib/transcript.js';
 import { formatDuration, useElapsed } from '../lib/duration.js';
-import { formatTokens, turnStats } from '../lib/metrics.js';
+import { formatSpend, turnStats } from '../lib/metrics.js';
 import { isAtBottom } from '../lib/scroll.js';
 
 const ROLE_LABELS = { user: 'Me', assistant: 'AI', error: 'Error' };
@@ -121,10 +121,10 @@ function ModelPanel({ model, turns, startedAt, onCopy, onRetry }) {
 
         {spent && (
           <span
-            title="Tokens used by this conversation"
+            title="Tokens used by this conversation, and their cost where the provider publishes prices"
             className="font-mono text-[11px] tabular-nums text-slate-400"
           >
-            {formatTokens(total)}
+            {formatSpend(total)}
           </span>
         )}
 
