@@ -6,6 +6,7 @@
  * entirely — a user with only cloud keys never starts it.
  */
 import { Ollama } from 'ollama';
+import { thinkTags } from './shared.mjs';
 
 const LABEL = 'Ollama';
 
@@ -47,7 +48,7 @@ export const ollama = {
     }
   },
 
-  async *chat({ model, messages, system, signal }) {
+  async *chat({ model, messages, system, think, signal }) {
     // A client per request, so aborting this stream leaves other in-flight
     // requests alone. The client exposes abort() rather than taking a signal,
     // so the signal is bridged to it.
@@ -56,15 +57,27 @@ export const ollama = {
     signal?.addEventListener('abort', onAbort, { once: true });
 
     try {
+      // A thinking model thinks by default, and its reasoning arrives apart
+      // from the answer. Asked to, though, a model that cannot think fails the
+      // request outright, so only one whose capabilities say it can is asked.
+      const canThink = think && (await client.show({ model })).capabilities?.includes('thinking');
+
       const stream = await client.chat({
         model,
         messages: system ? [{ role: 'system', content: system }, ...messages] : messages,
         stream: true,
+        ...(canThink ? { think: true } : {}),
       });
 
+      // A model whose template does not set its reasoning apart writes it into
+      // the answer, in <think> tags.
+      const split = thinkTags();
+
       for await (const part of stream) {
-        if (part.message?.content) yield { text: part.message.content };
+        if (part.message?.thinking) yield { reasoning: part.message.thinking };
+        if (part.message?.content) yield* split(part.message.content);
         if (part.done) {
+          yield* split();
           yield {
             usage: {
               promptTokens: part.prompt_eval_count ?? 0,

@@ -105,3 +105,68 @@ export function describeNetworkError(error, label) {
 export function sortModels(names) {
   return [...new Set(names)].filter(Boolean).sort((a, b) => a.localeCompare(b));
 }
+
+const OPEN = '<think>';
+const CLOSE = '</think>';
+
+/** How many characters at the end of `text` could be the start of `tag`. */
+function partialTag(text, tag) {
+  for (let length = Math.min(tag.length - 1, text.length); length > 0; length -= 1) {
+    if (tag.startsWith(text.slice(-length))) return length;
+  }
+  return 0;
+}
+
+/**
+ * Some models write their reasoning into the answer itself, between <think>
+ * tags at the very start — Qwen on Groq does by default, and so does a model
+ * whose template does not set it apart. This splits it back out.
+ *
+ * Returns a function that takes each chunk of streamed text and returns the
+ * parts in it, { reasoning } or { text }. A tag can arrive in pieces, so text
+ * that could still turn out to be one is held back until the next chunk
+ * settles it; call the function with no chunk at the end for anything held.
+ */
+export function thinkTags() {
+  let state = 'start';
+  let held = '';
+
+  return (chunk) => {
+    const done = chunk === undefined;
+    held += chunk ?? '';
+    const parts = [];
+
+    if (state === 'start') {
+      const leading = held.trimStart();
+      if (leading.startsWith(OPEN)) {
+        state = 'thinking';
+        held = leading.slice(OPEN.length);
+      } else if (!done && OPEN.startsWith(leading)) {
+        return parts;
+      } else {
+        state = 'answer';
+      }
+    }
+
+    if (state === 'thinking') {
+      const end = held.indexOf(CLOSE);
+      if (end === -1) {
+        const reasoning = held.slice(0, held.length - (done ? 0 : partialTag(held, CLOSE)));
+        // Whitespace waits for something visible, so an empty block shows nothing.
+        if (reasoning.trim()) {
+          parts.push({ reasoning });
+          held = held.slice(reasoning.length);
+        }
+        return parts;
+      }
+      const reasoning = held.slice(0, end);
+      if (reasoning.trim()) parts.push({ reasoning });
+      held = held.slice(end + CLOSE.length).trimStart();
+      state = 'answer';
+    }
+
+    if (held) parts.push({ text: held });
+    held = '';
+    return parts;
+  };
+}

@@ -22,6 +22,14 @@ describe('toMessages', () => {
     );
   });
 
+  it('never sends reasoning back to the model — it is there to be read', () => {
+    const messages = toMessages([
+      turn('user', 'hi'),
+      turn('assistant', 'hello', { reasoning: 'They greeted me.', thinkingMs: 900 }),
+    ]);
+    assert.deepEqual(messages[1], { role: 'assistant', content: 'hello' });
+  });
+
   it('drops error turns, which the model never said', () => {
     const messages = toMessages([turn('user', 'hi'), turn('error', 'Cannot reach Ollama')]);
     assert.deepEqual(messages, [{ role: 'user', content: 'hi' }]);
@@ -120,6 +128,14 @@ describe('the markdown export', () => {
     ]);
     assert.ok(text.includes('**Error**\n\n> Grok rate limit reached.'));
     assert.ok(text.includes('> ⚠️ Connection reset.'));
+  });
+
+  it('sets the reasoning apart above the answer, and says how long it took', () => {
+    const text = modelToMarkdown(gpt, [
+      turn('user', 'Why is the sky blue?'),
+      turn('assistant', 'Rayleigh scattering.', { reasoning: 'Short wavelengths.\nThey scatter most.', thinkingMs: 4200 }),
+    ]);
+    assert.ok(text.includes('**AI** · thought for 4.2s\n\n> **Thinking**\n>\n> Short wavelengths.\n> They scatter most.\n\nRayleigh scattering.'));
   });
 
   it('says so for a model that has not been asked anything', () => {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { sseEvents } from '../server/providers/shared.mjs';
+import { sseEvents, thinkTags } from '../server/providers/shared.mjs';
 
 /** A ReadableStream that hands out exactly these byte groups, as given. */
 function streamOf(...groups) {
@@ -58,5 +58,49 @@ describe('sseEvents', () => {
   it('produces nothing from a stream with no data lines', async () => {
     assert.deepEqual(await collect('event: ping\n\n'), []);
     assert.deepEqual(await collect(''), []);
+  });
+});
+
+/** Feed chunks through a fresh splitter, then flush it, collecting every part. */
+function split(chunks) {
+  const next = thinkTags();
+  return [...chunks.flatMap((chunk) => next(chunk)), ...next()];
+}
+
+describe('thinkTags', () => {
+  it('takes the reasoning out from between the tags, and trims the gap before the answer', () => {
+    assert.deepEqual(split(['<think>Add them.</think>\n\nFour.']), [
+      { reasoning: 'Add them.' },
+      { text: 'Four.' },
+    ]);
+  });
+
+  it('finds tags that arrive in pieces', () => {
+    assert.deepEqual(split(['<thi', 'nk>Add ', 'them.</th', 'ink>', 'Four.']), [
+      { reasoning: 'Add ' },
+      { reasoning: 'them.' },
+      { text: 'Four.' },
+    ]);
+  });
+
+  it('passes an answer with no tags straight through, whitespace and all', () => {
+    assert.deepEqual(split(['  Four', '.']), [{ text: '  Four' }, { text: '.' }]);
+  });
+
+  it('only looks for them at the start, so a tag later in an answer is left alone', () => {
+    assert.deepEqual(split(['Use ', '<think> in a prompt']), [{ text: 'Use ' }, { text: '<think> in a prompt' }]);
+  });
+
+  it('lets go of text that only looked like the start of a tag', () => {
+    assert.deepEqual(split(['<', 'b>bold</b>']), [{ text: '<b>bold</b>' }]);
+    assert.deepEqual(split(['<']), [{ text: '<' }]);
+  });
+
+  it('shows nothing for an empty block, which a model not asked to think sends', () => {
+    assert.deepEqual(split(['<think>\n\n', '</think>\n\n', 'Four.']), [{ text: 'Four.' }]);
+  });
+
+  it('keeps the reasoning of a model stopped before it answered', () => {
+    assert.deepEqual(split(['<think>Add them', ' up']), [{ reasoning: 'Add them' }, { reasoning: ' up' }]);
   });
 });

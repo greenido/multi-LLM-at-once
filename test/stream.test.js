@@ -46,7 +46,7 @@ async function collect(response) {
 }
 
 describe('streamQuery', () => {
-  it('sends the model, messages and system prompt to /query', async () => {
+  it('sends the model, messages and system prompt to /query, and whether to think', async () => {
     const { calls } = await collect(() =>
       streamed([frames({ type: 'chunk', text: 'hi' }, { type: 'done' })]),
     );
@@ -55,7 +55,33 @@ describe('streamQuery', () => {
       model: 'llama3:latest',
       messages: [{ role: 'user', content: 'hi' }],
       system: 'be terse',
+      think: false,
     });
+  });
+
+  it('keeps the reasoning apart from the answer', async () => {
+    const reasoning = [];
+    const chunks = [];
+    const calls = stubFetch(() =>
+      streamed([
+        frames(
+          { type: 'reasoning', text: 'First, ' },
+          { type: 'reasoning', text: 'add.' },
+          { type: 'chunk', text: 'Four.' },
+          { type: 'done' },
+        ),
+      ]),
+    );
+    await streamQuery({
+      model: 'm',
+      messages: [{ role: 'user', content: '2 + 2?' }],
+      think: true,
+      onChunk: (text) => chunks.push(text),
+      onReasoning: (text) => reasoning.push(text),
+    });
+    assert.equal(calls[0].body.think, true);
+    assert.deepEqual(reasoning, ['First, ', 'add.']);
+    assert.deepEqual(chunks, ['Four.']);
   });
 
   it('emits each chunk in order', async () => {

@@ -16,6 +16,7 @@ import {
   parseEvent,
   sortModels,
   sseEvents,
+  thinkTags,
 } from './shared.mjs';
 
 /**
@@ -58,10 +59,44 @@ export function readUsage(usage) {
   };
 }
 
+const textOf = (value) => (typeof value === 'string' ? value : '');
+
+/**
+ * A frame's answer text and reasoning. The API has no field for reasoning, so
+ * each provider picked its own: DeepSeek sends reasoning_content, Groq sends
+ * reasoning, OpenRouter sends reasoning_details — readable text or a summary,
+ * unless it is encrypted — and Mistral sends typed chunks in place of the
+ * content string.
+ */
+function readDelta(delta) {
+  let text = textOf(delta.content);
+  let reasoning = '';
+
+  if (Array.isArray(delta.content)) {
+    for (const chunk of delta.content) {
+      if (chunk?.type === 'text') text += textOf(chunk.text);
+      if (chunk?.type === 'thinking') {
+        reasoning += (Array.isArray(chunk.thinking) ? chunk.thinking : [])
+          .map((part) => textOf(part?.text))
+          .join('');
+      }
+    }
+  }
+
+  const details = Array.isArray(delta.reasoning_details)
+    ? delta.reasoning_details.map((detail) => textOf(detail?.text) || textOf(detail?.summary)).join('')
+    : '';
+  reasoning += details || textOf(delta.reasoning) || textOf(delta.reasoning_content);
+
+  return { text, reasoning };
+}
+
 /**
  * @param isChat       which entries of GET /models can hold a conversation
  * @param pricing      where a listing publishes prices: an entry's USD per
  *                     token as { prompt, completion }, or null
+ * @param reasoning    where a provider can be asked to reason: which entries
+ *                     take the request, and what to add to it
  * @param includeUsage whether to ask for token counts with stream_options
  * @param extraBody    anything else the provider wants on every request
  */
@@ -72,6 +107,7 @@ export function openAiCompatible({
   baseUrlEnv,
   isChat,
   pricing,
+  reasoning,
   includeUsage = true,
   extraBody = {},
   fallbackModels,
@@ -83,7 +119,10 @@ export function openAiCompatible({
     label,
     fallbackModels,
 
-    /** Names — or, where the listing publishes prices, { name, pricing }. */
+    /**
+     * Names — or, where the listing says more, { name, pricing, thinking }:
+     * what a model costs, and whether it can be asked to reason.
+     */
     async listModels(key) {
       let response;
       try {
@@ -97,15 +136,21 @@ export function openAiCompatible({
 
       const { data = [] } = await response.json();
       const chat = data.filter((entry) => typeof entry?.id === 'string' && isChat(entry));
-      if (!pricing) return sortModels(chat.map((entry) => entry.id));
+      if (!pricing && !reasoning) return sortModels(chat.map((entry) => entry.id));
 
-      const prices = new Map(chat.map((entry) => [entry.id, pricing(entry)]));
-      return sortModels([...prices.keys()]).map((name) =>
-        prices.get(name) ? { name, pricing: prices.get(name) } : { name },
+      const described = new Map(
+        chat.map((entry) => {
+          const price = pricing?.(entry);
+          return [entry.id, {
+            ...(price ? { pricing: price } : {}),
+            ...(reasoning?.supported(entry) ? { thinking: true } : {}),
+          }];
+        }),
       );
+      return sortModels([...described.keys()]).map((name) => ({ name, ...described.get(name) }));
     },
 
-    async *chat({ key, model, messages, system, signal }) {
+    async *chat({ key, model, messages, system, think, thinking, signal }) {
       // Unlike Anthropic, the system prompt is just a message with a role.
       const body = {
         model,
@@ -113,6 +158,7 @@ export function openAiCompatible({
         stream: true,
         // Without this OpenAI's final frame carries no token counts.
         ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
+        ...(think && thinking && reasoning ? reasoning.body : {}),
         ...extraBody,
       };
 
@@ -133,6 +179,8 @@ export function openAiCompatible({
       // Token counts can arrive on more than one frame — Groq repeats them
       // under x_groq — so the last seen is kept and reported once, at the end.
       let usage = null;
+      // Qwen on Groq, among others, writes its reasoning into the answer.
+      const split = thinkTags();
 
       for await (const payload of sseEvents(response.body)) {
         if (payload === '[DONE]') break;
@@ -143,13 +191,15 @@ export function openAiCompatible({
         // An error can also arrive mid-stream, after a 200.
         if (event.error) throw new Error(event.error.message ?? `${label} failed mid-stream.`);
 
-        const text = event.choices?.[0]?.delta?.content;
-        if (text) yield { text };
+        const { text, reasoning: thought } = readDelta(event.choices?.[0]?.delta ?? {});
+        if (thought) yield { reasoning: thought };
+        if (text) yield* split(text);
 
         const reported = event.usage ?? event.x_groq?.usage;
         if (reported) usage = readUsage(reported);
       }
 
+      yield* split();
       if (usage) yield { usage };
     },
   };
@@ -227,6 +277,10 @@ export const deepseek = openAiCompatible({
  * worked out, and asked for, it also reports what an answer actually cost,
  * which beats the list price when a request was cached or routed elsewhere.
  * The list includes image generators; only models that write text are kept.
+ *
+ * Asked to, it turns reasoning on for any model whose listing says it takes
+ * the request — Claude and Gemini among them, which otherwise answer without
+ * reasoning aloud. At its default, medium effort.
  */
 export const openrouter = openAiCompatible({
   id: 'openrouter',
@@ -235,6 +289,10 @@ export const openrouter = openAiCompatible({
   baseUrlEnv: 'OPENROUTER_BASE_URL',
   isChat: (entry) => (entry.architecture?.output_modalities ?? ['text']).includes('text'),
   pricing: readPricing,
+  reasoning: {
+    supported: (entry) => Array.isArray(entry.supported_parameters) && entry.supported_parameters.includes('reasoning'),
+    body: { reasoning: { enabled: true } },
+  },
   extraBody: { usage: { include: true } },
   fallbackModels: ['openai/gpt-4o-mini', 'meta-llama/llama-3.3-70b-instruct'],
 });

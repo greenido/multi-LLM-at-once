@@ -1,7 +1,21 @@
 import GrowingTextarea from './GrowingTextarea.jsx';
 import PromptMenu from './PromptMenu.jsx';
 
-export default function ContextBar({ value, onChange, onClear, canClear, prompts, onSavePrompt, onDeletePrompt }) {
+const THINKING_HELP =
+  'Ask Claude, Gemini, Ollama and OpenRouter models that can reason to think before answering, and show it. ' +
+  'Models that reason on their own show their reasoning either way.';
+
+export default function ContextBar({
+  value,
+  onChange,
+  think,
+  onThinkChange,
+  onClear,
+  canClear,
+  prompts,
+  onSavePrompt,
+  onDeletePrompt,
+}) {
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
       <div className="min-w-0 flex-1">
@@ -22,6 +36,20 @@ export default function ContextBar({ value, onChange, onClear, canClear, prompts
         onSave={(name, text) => onSavePrompt('system', name, text)}
         onDelete={onDeletePrompt}
       />
+      <button
+        type="button"
+        role="switch"
+        aria-checked={think}
+        onClick={() => onThinkChange(!think)}
+        title={THINKING_HELP}
+        className={`rounded-lg border px-4 py-2 text-sm font-medium shadow-sm transition ${
+          think
+            ? 'border-slate-900 bg-slate-900 text-white hover:bg-slate-700'
+            : 'border-slate-300 bg-white text-slate-600 hover:border-slate-400 hover:text-slate-900'
+        }`}
+      >
+        <span aria-hidden="true">💭</span> Thinking
+      </button>
       <button
         type="button"
         onClick={onClear}

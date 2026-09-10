@@ -35,14 +35,27 @@ https://greenido.wordpress.com/2024/04/08/the-power-of-many-why-you-should-consi
   fails, the row falls back to a curated list for that provider and flags
   itself as possibly incomplete rather than going empty.
 - **Token counts per answer** and a running total per panel, because cloud
-  models bill by the token and local ones do not. Reasoning a model does
-  privately is counted too, since it is billed as output. Where the provider
-  publishes prices — OpenRouter — the answer's cost is shown beside them.
+  models bill by the token and local ones do not. Reasoning is counted too,
+  since it is billed as output, and the count says how much of the output it
+  was — `1,222 out (1,000 reasoning)` — even for a model that never shows its
+  reasoning. Where the provider publishes prices — OpenRouter — the answer's
+  cost is shown beside them.
+- **Reasoning, shown deliberately.** A model that reasons out loud on its own
+  — DeepSeek's reasoner, Qwen and GPT-OSS on Groq, a thinking model in Ollama
+  — shows that reasoning above its answer rather than mixed into it, in a
+  **Thinking** section that stays open while the model thinks and folds away,
+  saying for how long, once the answer starts. The **Thinking** switch beside
+  the system prompt goes further: it asks the models that can reason but
+  otherwise keep it to themselves — Claude, Gemini, and OpenRouter's reasoning
+  models — to reason and show a summary of it, and tells an Ollama model that
+  can think to do so. It is off by default and remembered. Reasoning is kept
+  in History and the export, and never sent back to a model.
 - **Streams as it generates,** with a live timer per model. Every answer then
   shows the numbers worth comparing: total time, **time to the first token**,
   and **tokens per second** once it started writing — so a model that is slow
-  to start is not mistaken for one that is slow to write. Speed leaves out
-  hidden reasoning tokens, which never stream, and a local model's speed is
+  to start is not mistaken for one that is slow to write. The first token can
+  be reasoning; reasoning that streams counts towards the speed, and hidden
+  reasoning, which never streams, is left out of it. A local model's speed is
   Ollama's own measurement. A **cold load** of a local model — the weights
   coming off disk — is shown on its own rather than counted against it.
 - **Panels follow their own output** while it streams, so four models can be
@@ -193,13 +206,17 @@ each provider's real wire format — Ollama's included — and asserts both
 directions: that their frames parse, and that the API key, the system prompt
 and the history go where each API expects them. It also pins down how each
 provider reports a reasoning model's hidden tokens, which three of them do in
-three different ways, and each one's departures from the API it copies.
+three different ways; the five different places a model's reasoning can
+arrive, two of them inside the answer; which models the Thinking switch asks,
+and how; and each provider's departures from the API it copies.
 `registry.test.js` checks that a published price reaches the catalogue and
 that a priced model can still be asked for. The
 server tests boot the real server and cover
 request validation, the settings, history and prompt routes, the
 unreachable-provider paths, the cross-site requests that must not reach a
-provider, and requests addressed to a name that is not this machine.
+provider, and requests addressed to a name that is not this machine. One
+follows the Thinking switch through a stand-in provider, from the request to
+the reasoning streamed back.
 
 No test reaches a real provider, and none needs Ollama running.
 
@@ -232,12 +249,12 @@ All optional.
 | `ALLOWED_ORIGINS` | — | Comma-separated extra origins allowed to POST, for a UI served elsewhere. |
 | `ALLOWED_HOSTS` | — | Comma-separated extra host names to answer to while bound to loopback. |
 | `OLLAMA_URL` | `http://localhost:11434` | Where to reach Ollama. |
-| `QUERY_TIMEOUT_MS` | `120000` | Abort a model that never finishes. |
+| `QUERY_TIMEOUT_MS` | `120000` | Abort a model that never finishes. A model asked to think can take minutes over a hard question. |
 | `NODE_ENV` | — | Set to `production` to serve `dist/`. |
 | `KEYS_DB` | `data/keys.db` | Where the API keys are stored. |
 | `HISTORY_DB` | `data/history.db` | Where saved comparisons and prompts are stored. |
 | `OPENAI_API_KEY` etc. | — | A key supplied by the environment instead of the modal. |
-| `ANTHROPIC_MAX_TOKENS` | `4096` | Anthropic requires a cap on every request. |
+| `ANTHROPIC_MAX_TOKENS` | `4096` | Anthropic requires a cap on every request; this is the answer's share. A Claude that may think gets 16,000 more, since thinking counts against the same cap. |
 | `OPENAI_BASE_URL` etc. | the provider | Point an adapter somewhere else — a proxy, or a stub. |
 
 ## How it is put together
@@ -297,14 +314,39 @@ and one entry per provider carrying its label, whether it is keyless, whether a
 key is configured, how many models it offered and any listing error. A model
 whose provider publishes prices carries `pricing`, in USD per token.
 
-`POST /query` takes `{ model, messages, system }` and replies with
+`POST /query` takes `{ model, messages, system, think }` and replies with
 newline-delimited JSON:
 
 ```
+{"type":"reasoning","text":"..."}                      zero or more, ahead of the answer
 {"type":"chunk","text":"..."}                          zero or more
 {"type":"usage","promptTokens":9,"completionTokens":4}   at most one
 {"type":"done"}                  or {"type":"error","error":"..."}
 ```
+
+`think: true` is the Thinking switch. A model that reasons unasked sends
+`reasoning` events either way; the switch asks the rest, where the model's
+listing says it can be asked:
+
+| Provider | Asked with | Which models |
+| --- | --- | --- |
+| Anthropic | `thinking: { type: "adaptive", display: "summarized" }`, or a 16,000-token `budget_tokens` | Claude 4.6 and later think adaptively, 4.5 and earlier to a budget — the listing says which |
+| Gemini | `thinkingConfig: { includeThoughts: true }` | those the listing marks `thinking` |
+| Ollama | `think: true` | those whose capabilities include `thinking` — asking one that cannot is an error |
+| OpenRouter | `reasoning: { enabled: true }` — medium effort | those that list `reasoning` among their parameters |
+
+Claude Opus 5, Sonnet 5 and Fable think whether asked or not, silently, so
+every Claude that thinks adaptively gets room for it in `max_tokens`.
+
+The chat completions API has no field for reasoning, so each provider that
+sends it chose its own: DeepSeek uses `reasoning_content`, Groq `reasoning`,
+OpenRouter `reasoning_details`, and Mistral replaces the content string with
+typed chunks. Qwen on Groq, and a model in Ollama with no template
+for its reasoning, write it into the answer between `<think>` tags, which the
+adapters take back out. Anthropic streams `thinking_delta`s, Gemini parts
+marked `thought`, and Ollama a `thinking` field. What reaches the browser is
+the same either way. Reasoning is never sent back: the conversation a model
+sees is its questions and its answers.
 
 `completionTokens` is everything the model wrote, reasoning included. A usage
 event can also carry `reasoningTokens` — how much of that was reasoning;
@@ -333,6 +375,7 @@ prompts are `GET /api/prompts`, `POST /api/prompts` with `{ kind, name, text }`
 - [x] Add more query options / pre-defined queries
 - [x] Save and reload past comparisons
 - [x] Show tokens/sec alongside the wall-clock timer
+- [x] Show a model's reasoning, and ask the ones that can to reason
 - [ ] Allow to leverage [llama_index](https://github.com/run-llama/llama_index)
 
 ## License

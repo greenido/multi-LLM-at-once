@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { rmSync } from 'node:fs';
-import { request } from 'node:http';
+import { createServer, request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -26,9 +26,42 @@ const KEY = 'sk-test-000000000000000000000000004f2a';
 
 let server;
 
+/**
+ * A stand-in for OpenRouter, so a query can be followed all the way through:
+ * one model, listed as taking the reasoning request, which reasons and then
+ * answers. It keeps the last request body it was sent.
+ */
+let stub;
+let received = null;
+
+function startStub() {
+  const sse = (...values) => values.map((value) => `data: ${JSON.stringify(value)}\n\n`).join('');
+  stub = createServer((req, res) => {
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        data: [{ id: 'deepseek/deepseek-r1', architecture: { output_modalities: ['text'] }, supported_parameters: ['reasoning'] }],
+      }));
+    }
+    let raw = '';
+    req.on('data', (chunk) => { raw += chunk; });
+    req.on('end', () => {
+      received = JSON.parse(raw);
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.end(`${sse(
+        { choices: [{ delta: { reasoning_details: [{ type: 'reasoning.text', text: 'First, add.' }] } }] },
+        { choices: [{ delta: { content: 'Four.' } }] },
+        { choices: [], usage: { prompt_tokens: 9, completion_tokens: 20 } },
+      )}data: [DONE]\n\n`);
+    });
+  });
+  return new Promise((resolve) => stub.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${stub.address().port}`)));
+}
+
 before(async () => {
   rmSync(DB, { force: true });
   rmSync(HISTORY, { force: true });
+  const openrouter = await startStub();
   server = spawn(process.execPath, ['server.mjs'], {
     env: {
       ...process.env,
@@ -48,6 +81,7 @@ before(async () => {
       GROQ_API_KEY: '',
       MISTRAL_API_KEY: '',
       DEEPSEEK_API_KEY: '',
+      OPENROUTER_BASE_URL: openrouter,
     },
     stdio: 'ignore',
   });
@@ -65,6 +99,7 @@ before(async () => {
 
 after(() => {
   server?.kill();
+  stub?.close();
   rmSync(DB, { force: true });
   rmSync(HISTORY, { force: true });
 });
@@ -122,6 +157,12 @@ describe('POST /query validation', () => {
     });
     assert.equal(res.status, 400);
     assert.match((await res.json()).error, /last message must be from the user/i);
+  });
+
+  it('rejects a think that is not true or false', async () => {
+    const res = await post({ model: MODEL, messages: ask, think: 'yes' });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /think must be true or false/);
   });
 
   it('rejects a non-string system prompt', async () => {
@@ -495,5 +536,35 @@ describe('cross-site requests', () => {
   it('leaves reads alone: they change nothing and return no key', async () => {
     const res = await fetch(`${BASE}/api/models`, { headers: { Origin: EVIL } });
     assert.equal(res.status, 200);
+  });
+});
+
+/**
+ * The Thinking switch end to end: from the request, through what the model's
+ * listing said about it, to what the provider is sent — and the reasoning back
+ * out as events of its own.
+ */
+describe('a model that reasons', () => {
+  const R1 = 'openrouter:deepseek/deepseek-r1';
+  const lines = async (res) => (await res.text()).trim().split('\n').map((line) => JSON.parse(line));
+
+  before(() => putKey('openrouter', KEY));
+  after(() => fetch(`${BASE}/api/settings/openrouter`, { method: 'DELETE' }));
+
+  it('streams its reasoning ahead of the answer, as events of their own', async () => {
+    const res = await post({ model: R1, messages: ask });
+    assert.equal(res.status, 200);
+    assert.deepEqual((await lines(res)).filter((event) => event.type !== 'usage'), [
+      { type: 'reasoning', text: 'First, add.' },
+      { type: 'chunk', text: 'Four.' },
+      { type: 'done' },
+    ]);
+  });
+
+  it('is asked to reason only when the switch is on', async () => {
+    await lines(await post({ model: R1, messages: ask }));
+    assert.equal('reasoning' in received, false);
+    await lines(await post({ model: R1, messages: ask, think: true }));
+    assert.deepEqual(received.reasoning, { enabled: true });
   });
 });

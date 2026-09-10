@@ -8,18 +8,19 @@ const USAGE_EXTRAS = ['reasoningTokens', 'loadMs', 'evalMs', 'costUsd'];
 
 /**
  * Reads the newline-delimited JSON stream that POST /query returns, calling
- * onChunk for each piece of text as it arrives and onUsage with the token
- * counts the provider reported.
+ * onChunk for each piece of the answer as it arrives, onReasoning for each
+ * piece of the reasoning ahead of it, and onUsage with the token counts the
+ * provider reported. `think` asks models that can reason to show it.
  *
  * Throws on a non-2xx response, on an in-band {"type":"error"} event, and
  * rethrows the AbortError when `signal` is aborted so the caller can tell a
  * cancellation apart from a failure.
  */
-export async function streamQuery({ model, messages, system, signal, onChunk, onUsage }) {
+export async function streamQuery({ model, messages, system, think = false, signal, onChunk, onReasoning, onUsage }) {
   const response = await fetch('/query', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, messages, system }),
+    body: JSON.stringify({ model, messages, system, think }),
     signal,
   });
 
@@ -49,6 +50,7 @@ export async function streamQuery({ model, messages, system, signal, onChunk, on
     }
 
     if (event.type === 'chunk' && event.text) onChunk(event.text);
+    if (event.type === 'reasoning' && event.text) onReasoning?.(event.text);
     if (event.type === 'usage') {
       const usage = {
         promptTokens: event.promptTokens ?? 0,

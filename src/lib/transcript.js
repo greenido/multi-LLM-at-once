@@ -1,7 +1,9 @@
 /**
  * Transcript helpers. A transcript is an ordered list of
  * { role: 'user' | 'assistant' | 'error', text: string } turns, where an
- * answer also carries whatever was measured about it — see metrics.js.
+ * answer also carries any reasoning that came ahead of it, and whatever was
+ * measured about it — see metrics.js. Reasoning is for reading: it is never
+ * sent back to a model.
  */
 import { formatSpend, turnStats } from './metrics.js';
 
@@ -76,8 +78,10 @@ function turnToMarkdown(turn) {
 
   const stats = Object.values(turnStats(turn)).filter(Boolean);
   const label = ['**AI**', ...stats, ...(turn.streaming ? ['still answering'] : [])].join(' · ');
+  // The reasoning ahead of the answer, set apart the way the panel sets it apart.
+  const reasoning = turn.reasoning?.trim() ? `\n\n${quote(`**Thinking**\n\n${turn.reasoning.trim()}`)}` : '';
   const note = turn.note ? `\n\n${quote(`⚠️ ${turn.note}`)}` : '';
-  return `${label}\n\n${turn.text.trim()}${note}`;
+  return `${label}${reasoning}\n\n${turn.text.trim()}${note}`;
 }
 
 /** One model's conversation, titled with the model that had it. */

@@ -8,7 +8,7 @@ import { isAtBottom } from '../lib/scroll.js';
 const ROLE_LABELS = { user: 'Me', assistant: 'AI', error: 'Error' };
 
 const TIMING_HELP =
-  'Total time · model load (a cold local model only) · time to the first token · output speed once it started';
+  'Total time · model load (a cold local model only) · time to the first token, reasoning included · output speed once it started';
 
 /**
  * The live timer ticks ten times a second. On its own that would re-render the
@@ -27,6 +27,26 @@ function ElapsedTime({ startedAt, label }) {
         {formatDuration(elapsed)}
       </span>
     </>
+  );
+}
+
+/**
+ * The reasoning ahead of an answer, kept apart from it. Open while it is all
+ * that is arriving, so a model thinking for a minute is visibly doing
+ * something; folded away once the answer starts, and there to open after.
+ */
+function Thinking({ turn }) {
+  const thinking = turn.thinkingMs === undefined;
+  return (
+    <details
+      open={thinking && Boolean(turn.streaming)}
+      className="mb-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5"
+    >
+      <summary className="cursor-pointer select-none text-xs font-medium text-slate-500">
+        {thinking ? 'Thinking…' : `Thought for ${formatDuration(turn.thinkingMs)}`}
+      </summary>
+      <Markdown className="mt-1.5 text-slate-500">{turn.reasoning}</Markdown>
+    </details>
   );
 }
 
@@ -55,6 +75,7 @@ const Turn = memo(function Turn({ turn }) {
 
       {turn.role === 'assistant' ? (
         <div className="mt-1">
+          {turn.reasoning?.trim() && <Thinking turn={turn} />}
           <Markdown>{turn.text}</Markdown>
           {turn.streaming && (
             <span

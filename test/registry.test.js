@@ -56,9 +56,15 @@ describe('the catalogue', () => {
     assert.equal('pricing' in models.find((model) => model.provider === 'groq'), false);
   });
 
-  it('finds a listed model either way when checking a request', async () => {
-    assert.deepEqual(await registry.checkAvailability('openrouter:openai/gpt-4o'), { ok: true });
-    assert.deepEqual(await registry.checkAvailability('groq:llama-3.3-70b-versatile'), { ok: true });
+  it('finds a listed model either way when checking a request, and says what was listed', async () => {
+    assert.deepEqual(await registry.checkAvailability('openrouter:openai/gpt-4o'), {
+      ok: true,
+      model: { name: 'openai/gpt-4o', pricing: { prompt: 0.0000025, completion: 0.00001 } },
+    });
+    assert.deepEqual(await registry.checkAvailability('groq:llama-3.3-70b-versatile'), {
+      ok: true,
+      model: { name: 'llama-3.3-70b-versatile' },
+    });
     assert.equal((await registry.checkAvailability('openrouter:openai/gpt-5')).status, 400);
   });
 });
