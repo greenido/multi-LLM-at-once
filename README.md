@@ -4,7 +4,7 @@ Ask several LLMs the same question at once and compare their answers side by
 side — local [Ollama](https://ollama.com) models, the OpenAI, Anthropic, Google
 Gemini and Grok APIs, or a mix of both.
 
-<img src="images/multi-screen-llama-25-4-2024.png">
+<img src="images/screenshot-9-9-2026.png" alt="Two Gemini models answering the same question side by side, each panel showing its own token counts and duration">
 
 For a longer explanation of the why/how/when:
 https://greenido.wordpress.com/2024/04/08/the-power-of-many-why-you-should-consider-using-multiple-large-language-models/
@@ -18,6 +18,13 @@ https://greenido.wordpress.com/2024/04/08/the-power-of-many-why-you-should-consi
 - **Whatever you actually have.** The model list is read from Ollama and from
   each provider you have a key for, so a newly pulled model or a newly released
   one shows up in the picker with no code change.
+- **A picker that survives a long list.** Models sit in one row per provider,
+  and a provider offering dozens of them shows the first few behind a
+  `+28 more`. Anything selected stays visible, and pills hold their position
+  so they do not jump under the cursor when a row expands.
+- **A provider that will not answer still works.** If a live model listing
+  fails, the row falls back to a curated list for that provider and flags
+  itself as possibly incomplete rather than going empty.
 - **Token counts per answer** and a running total per panel, because cloud
   models bill by the token and local ones do not.
 - **Streams as it generates,** with a live timer per model and a final duration
@@ -26,7 +33,8 @@ https://greenido.wordpress.com/2024/04/08/the-power-of-many-why-you-should-consi
 - **A real conversation per model.** Follow-up questions work, and each model
   only ever sees its own thread.
 - **A system prompt** applied to every model, so you compare them under the
-  same instruction.
+  same instruction. It and your model selection are remembered across reloads;
+  **New chat** clears every panel without touching either.
 - Answers render as markdown — tables, fenced code and lists read as
   themselves. Copy and export give you the raw text.
 
@@ -166,6 +174,17 @@ boundary. There is no vendor SDK: the wire formats are small and plain
 Model ids are namespaced `provider:name` — `openai:gpt-4o`,
 `ollama:llama3:latest` — and the catalogue doubles as the allowlist, so a
 client cannot name a model that is not actually available.
+
+Listings are cached per provider: Ollama for 10 seconds, so a model you just
+pulled turns up almost at once, and the cloud catalogues for 5 minutes, since
+they change slowly and their calls are metered. Saving or clearing a key
+invalidates that provider's entry immediately. A listing that throws does not
+empty the picker — the provider's curated fallback list stands in, and the
+error rides along so the UI can say the row may be incomplete.
+
+`GET /api/models` returns `{ models, providers }` — every queryable model,
+and one entry per provider carrying its label, whether it is keyless, whether a
+key is configured, how many models it offered and any listing error.
 
 `POST /query` takes `{ model, messages, system }` and replies with
 newline-delimited JSON:
