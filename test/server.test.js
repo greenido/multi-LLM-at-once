@@ -256,3 +256,88 @@ describe('routes that no longer exist', () => {
     });
   }
 });
+
+/**
+ * A form-encoded body is a CORS "simple request": a browser sends it
+ * cross-origin with no preflight, so a page the user merely visits could once
+ * post a query through this server and spend their credits. Two things stop it
+ * now — only JSON is parsed, and a state-changing request from an origin that
+ * is not ours is refused — and both are worth holding onto.
+ */
+describe('cross-site requests', () => {
+  const EVIL = 'https://evil.example';
+  const SELF = BASE;
+
+  const send = (path, { origin, type = 'application/json', body } = {}) =>
+    fetch(`${BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': type, ...(origin ? { Origin: origin } : {}) },
+      body,
+    });
+
+  const form = 'model=ollama:llama3:latest&messages[0][role]=user&messages[0][content]=hi';
+  const json = JSON.stringify({ model: MODEL, messages: ask });
+
+  it('blocks the form post that used to reach a provider', async () => {
+    const res = await send('/query', {
+      origin: EVIL,
+      type: 'application/x-www-form-urlencoded',
+      body: form,
+    });
+    assert.equal(res.status, 403);
+    assert.match((await res.json()).error, /cross-site/i);
+  });
+
+  it('blocks a JSON query from another site', async () => {
+    const res = await send('/query', { origin: EVIL, body: json });
+    assert.equal(res.status, 403);
+  });
+
+  it('blocks another site from writing an API key', async () => {
+    const res = await fetch(`${BASE}/api/settings/openai`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Origin: EVIL },
+      body: JSON.stringify({ apiKey: KEY }),
+    });
+    assert.equal(res.status, 403);
+  });
+
+  it('blocks another site from deleting one', async () => {
+    const res = await fetch(`${BASE}/api/settings/openai`, {
+      method: 'DELETE',
+      headers: { Origin: EVIL },
+    });
+    assert.equal(res.status, 403);
+  });
+
+  it('stops parsing form bodies at all, whoever sends them', async () => {
+    const res = await send('/query', {
+      origin: SELF,
+      type: 'application/x-www-form-urlencoded',
+      body: form,
+    });
+    // Not a 403 — this one is allowed through and simply has no body to read.
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /model id is required/i);
+  });
+
+  it('lets the app itself through', async () => {
+    const res = await send('/query', { origin: SELF, body: json });
+    assert.notEqual(res.status, 403);
+  });
+
+  it('lets the Vite dev server through', async () => {
+    const res = await send('/query', { origin: 'http://localhost:5173', body: json });
+    assert.notEqual(res.status, 403);
+  });
+
+  it('lets a request with no Origin through — curl is not a cross-site attack', async () => {
+    const res = await send('/query', { body: json });
+    assert.notEqual(res.status, 403);
+  });
+
+  it('leaves reads alone: they change nothing and return no key', async () => {
+    const res = await fetch(`${BASE}/api/models`, { headers: { Origin: EVIL } });
+    assert.equal(res.status, 200);
+  });
+});

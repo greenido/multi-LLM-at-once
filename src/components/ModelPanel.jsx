@@ -1,19 +1,111 @@
+import { memo, useCallback, useEffect, useRef } from 'react';
 import Markdown from './Markdown.jsx';
 import { totalTokens, transcriptToText } from '../lib/transcript.js';
 import { formatDuration, useElapsed } from '../lib/duration.js';
+import { isAtBottom } from '../lib/scroll.js';
 
 const ROLE_LABELS = { user: 'Me', assistant: 'AI', error: 'Error' };
 
 const formatTokens = ({ promptTokens, completionTokens }) =>
   `${promptTokens.toLocaleString()} in · ${completionTokens.toLocaleString()} out`;
 
-export default function ModelPanel({ model, turns, startedAt, onCopy }) {
+/**
+ * The live timer ticks ten times a second. On its own that would re-render the
+ * whole panel — and re-parse every answer in it — so it renders itself.
+ */
+function ElapsedTime({ startedAt, label }) {
   const elapsed = useElapsed(startedAt);
+  return (
+    <>
+      <span
+        role="status"
+        aria-label={`Waiting for ${label}`}
+        className="inline-block size-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600"
+      />
+      <span className="font-mono text-xs tabular-nums text-slate-500">
+        {formatDuration(elapsed)}
+      </span>
+    </>
+  );
+}
+
+/**
+ * One turn. Memoized on the turn object, which is the whole point: a streaming
+ * answer replaces only the last turn, so everything above it keeps its identity
+ * and react-markdown does not re-parse an answer that has not changed.
+ */
+const Turn = memo(function Turn({ turn }) {
+  return (
+    <li>
+      <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+        {ROLE_LABELS[turn.role]}
+        {turn.ms !== undefined && (
+          <span className="ml-2 font-mono normal-case tabular-nums text-slate-400">
+            {formatDuration(turn.ms)}
+          </span>
+        )}
+        {turn.usage && (
+          <span className="ml-2 font-mono normal-case tabular-nums text-slate-300">
+            {formatTokens(turn.usage)}
+          </span>
+        )}
+      </span>
+
+      {turn.role === 'assistant' ? (
+        <div className="mt-1">
+          <Markdown>{turn.text}</Markdown>
+          {turn.streaming && (
+            <span
+              aria-hidden="true"
+              className="inline-block h-4 w-[2px] animate-pulse bg-slate-500 align-text-bottom"
+            />
+          )}
+        </div>
+      ) : (
+        // The question as typed, and errors verbatim — neither is markdown.
+        <p
+          className={`mt-1 text-[13px] leading-relaxed whitespace-pre-wrap ${
+            turn.role === 'error' ? 'font-mono text-red-600' : 'text-slate-500'
+          }`}
+        >
+          {turn.text}
+        </p>
+      )}
+
+      {turn.note && <p className="mt-1 text-xs text-red-600">{turn.note}</p>}
+    </li>
+  );
+});
+
+function ModelPanel({ model, turns, startedAt, onCopy }) {
   const running = Boolean(startedAt);
 
   // Cloud models bill by the token, so the panel keeps a running total.
   const total = totalTokens(turns);
   const spent = total.promptTokens + total.completionTokens > 0;
+
+  const scroller = useRef(null);
+  // Whether the view should chase the output. A ref, not state: it changes on
+  // every scroll event and nothing renders differently because of it.
+  const following = useRef(true);
+
+  // Asking a new question is a deliberate move to the present, so following
+  // resumes even if the user had scrolled up to read something earlier.
+  useEffect(() => {
+    if (startedAt) following.current = true;
+  }, [startedAt]);
+
+  // Four models streaming at once means four panels that would each have to be
+  // scrolled by hand. `turns` gets a new identity on every flush, which is
+  // exactly when there is new text to reveal.
+  useEffect(() => {
+    const element = scroller.current;
+    if (element && following.current) element.scrollTop = element.scrollHeight;
+  }, [turns]);
+
+  const onScroll = useCallback(() => {
+    if (scroller.current) following.current = isAtBottom(scroller.current);
+  }, []);
 
   return (
     <section className="flex min-h-0 flex-col rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -22,18 +114,7 @@ export default function ModelPanel({ model, turns, startedAt, onCopy }) {
           <span aria-hidden="true">{model.emoji}</span> {model.label}
         </h2>
 
-        {running && (
-          <>
-            <span
-              role="status"
-              aria-label={`Waiting for ${model.label}`}
-              className="inline-block size-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600"
-            />
-            <span className="font-mono text-xs tabular-nums text-slate-500">
-              {formatDuration(elapsed)}
-            </span>
-          </>
-        )}
+        {running && <ElapsedTime startedAt={startedAt} label={model.label} />}
 
         {spent && (
           <span
@@ -55,50 +136,17 @@ export default function ModelPanel({ model, turns, startedAt, onCopy }) {
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+      <div
+        ref={scroller}
+        onScroll={onScroll}
+        className="min-h-0 flex-1 overflow-y-auto px-4 py-3"
+      >
         {turns.length === 0 ? (
           <p className="text-sm text-slate-400">Ask something to see {model.label}&rsquo;s answer.</p>
         ) : (
           <ol className="space-y-4">
             {turns.map((turn, index) => (
-              <li key={index}>
-                <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  {ROLE_LABELS[turn.role]}
-                  {turn.ms !== undefined && (
-                    <span className="ml-2 font-mono normal-case tabular-nums text-slate-400">
-                      {formatDuration(turn.ms)}
-                    </span>
-                  )}
-                  {turn.usage && (
-                    <span className="ml-2 font-mono normal-case tabular-nums text-slate-300">
-                      {formatTokens(turn.usage)}
-                    </span>
-                  )}
-                </span>
-
-                {turn.role === 'assistant' ? (
-                  <div className="mt-1">
-                    <Markdown>{turn.text}</Markdown>
-                    {turn.streaming && (
-                      <span
-                        aria-hidden="true"
-                        className="inline-block h-4 w-[2px] animate-pulse bg-slate-500 align-text-bottom"
-                      />
-                    )}
-                  </div>
-                ) : (
-                  // The question as typed, and errors verbatim — neither is markdown.
-                  <p
-                    className={`mt-1 text-[13px] leading-relaxed whitespace-pre-wrap ${
-                      turn.role === 'error' ? 'font-mono text-red-600' : 'text-slate-500'
-                    }`}
-                  >
-                    {turn.text}
-                  </p>
-                )}
-
-                {turn.note && <p className="mt-1 text-xs text-red-600">{turn.note}</p>}
-              </li>
+              <Turn key={index} turn={turn} />
             ))}
           </ol>
         )}
@@ -106,3 +154,7 @@ export default function ModelPanel({ model, turns, startedAt, onCopy }) {
     </section>
   );
 }
+
+// A panel only re-renders for its own model: one model streaming should not
+// re-render the three beside it.
+export default memo(ModelPanel);

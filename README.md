@@ -29,6 +29,10 @@ https://greenido.wordpress.com/2024/04/08/the-power-of-many-why-you-should-consi
   models bill by the token and local ones do not.
 - **Streams as it generates,** with a live timer per model and a final duration
   on every answer — the numbers you actually want when comparing models.
+- **Panels follow their own output** while it streams, so four models can be
+  watched at once without scrolling four boxes by hand. Scroll one up to
+  re-read an earlier answer and it stays where you put it until the next
+  question.
 - **Stop** abandons a run and keeps whatever streamed in so far.
 - **A real conversation per model.** Follow-up questions work, and each model
   only ever sees its own thread.
@@ -96,10 +100,15 @@ Where they live, and what that does and does not protect:
   the same disk would look safer without being safer, so the real protections
   are the file permissions, your disk encryption, and `data/` staying out of
   version control.
-- Anyone who can reach the server can spend your credits through it. It binds
-  to all interfaces, so do not expose it to a network you do not trust, and if
-  you ever put it behind a hostname, terminate TLS in front of it — a key typed
-  into the settings modal crosses the wire on its way to the server.
+- Anyone who can reach the server can spend your credits through it, so it
+  listens on `127.0.0.1` only. Reaching it from another machine is opt-in —
+  set `HOST=0.0.0.0` — and if you do, put it behind something that
+  authenticates and terminate TLS in front of it: a key typed into the settings
+  modal crosses the wire on its way to the server.
+- A web page you merely visit cannot drive the server on your behalf. Only JSON
+  bodies are parsed, which makes every route preflighted, and a state-changing
+  request carrying an `Origin` that is not the app's own is refused. Add
+  `ALLOWED_ORIGINS` if you serve the UI from somewhere else.
 
 If you would rather not type a key into a web page at all, set it in the
 server's environment instead and the modal will show it as configured and
@@ -119,13 +128,15 @@ npm test
 ```
 
 Unit tests cover the transcript and history logic, the model registry, the
-streaming NDJSON parser, the SSE reader, the key store and the storage wrapper.
+streaming NDJSON parser, the SSE reader, the key store, the storage wrapper and
+the stick-to-bottom rule the panels scroll by.
 
 `providers.test.js` stands a stub in front of the four cloud adapters that
 answers in each provider's real wire format, and asserts both directions: that
 their frames parse, and that the API key, the system prompt and the history go
 where each API expects them. The server tests boot the real server and cover
-request validation, the settings routes and the unreachable-provider paths.
+request validation, the settings routes, the unreachable-provider paths and the
+cross-site requests that must not reach a provider.
 
 No test reaches a real provider, and none needs Ollama running.
 
@@ -136,6 +147,8 @@ All optional.
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `PORT` | `3000` | Port the API listens on. |
+| `HOST` | `127.0.0.1` | Address to bind. `0.0.0.0` exposes it to the network — see the warning above. |
+| `ALLOWED_ORIGINS` | — | Comma-separated extra origins allowed to POST, for a UI served elsewhere. |
 | `OLLAMA_URL` | `http://localhost:11434` | Where to reach Ollama. |
 | `QUERY_TIMEOUT_MS` | `120000` | Abort a model that never finishes. |
 | `NODE_ENV` | — | Set to `production` to serve `dist/`. |
@@ -152,7 +165,7 @@ src/App.jsx           state: models, selection, transcripts, in-flight requests
 src/components/       Navbar, ContextBar, ModelPicker, ModelPanel, QueryBar,
                       SettingsModal, Markdown
 src/lib/              models (catalogue), settings (keys), transcript (history),
-                      stream (NDJSON), duration, storage
+                      stream (NDJSON), duration, storage, scroll (stick-to-bottom)
 server.mjs            Express API and routing
 server/keystore.mjs   API keys in SQLite, masked on the way out
 server/registry.mjs   every provider's models under one namespaced list
