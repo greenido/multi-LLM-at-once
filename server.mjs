@@ -28,12 +28,63 @@ import {
 
 const app = express();
 const port = process.env.PORT ?? 3000;
+// Loopback by default. This server holds API keys and will spend them for
+// anyone who can reach it, so exposing it to a network is opt-in: set HOST to
+// 0.0.0.0 (behind TLS, and something that authenticates) when you mean it.
+const host = process.env.HOST ?? '127.0.0.1';
 const isProduction = process.env.NODE_ENV === 'production';
 const queryTimeoutMs = Number(process.env.QUERY_TIMEOUT_MS ?? 120_000);
 
 // A transcript of twenty turns is bigger than the 100kb default.
+//
+// JSON only, deliberately. A form-encoded body is a CORS *simple request*: the
+// browser sends it cross-origin with no preflight and no opt-in from us, so
+// parsing one would let any page the user happens to visit post a query
+// through this server and spend their credits. Nothing here sends a form, and
+// requiring JSON means every route is preflighted — a preflight a cross-site
+// caller cannot pass.
 app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+//
+// A second lock on the same door, for the day a route accepts something simple
+// again.
+//
+// Browsers attach Origin to every state-changing request, so an Origin that is
+// not ours is by definition cross-site. A request with no Origin at all is not
+// from a browser — curl, a script, a test — and carries no ambient authority
+// to abuse, so it passes.
+//
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+const allowedOrigins = new Set([
+  ...(process.env.ALLOWED_ORIGINS?.split(',')
+    .map((value) => value.trim())
+    .filter(Boolean) ?? []),
+  // In development the UI is served by Vite on another port, which makes the
+  // browser's own requests cross-origin.
+  ...(isProduction ? [] : ['http://localhost:5173', 'http://127.0.0.1:5173']),
+]);
+
+/** The host:port the request arrived on, so a direct visit is always allowed. */
+function isSameOrigin(req, origin) {
+  try {
+    return new URL(origin).host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
+app.use((req, res, next) => {
+  if (SAFE_METHODS.has(req.method)) return next();
+
+  const origin = req.headers.origin;
+  if (!origin || allowedOrigins.has(origin) || isSameOrigin(req, origin)) return next();
+
+  console.warn(`⛔️ Blocked ${req.method} ${req.path} from ${origin}`);
+  res.status(403).json({
+    error: 'Cross-site request blocked. Open the app directly rather than through another page.',
+  });
+});
 
 // In production the built React bundle is the whole UI. In development Vite
 // serves it instead, so there is nothing to mount here.
@@ -279,8 +330,8 @@ app.post('/query', async (req, res) => {
 //
 // 🥥 Start the server
 //
-app.listen(port, () => {
-  console.log(`🥥 API running at: http://localhost:${port}`);
+app.listen(port, host, () => {
+  console.log(`🥥 API running at: http://${host}:${port}`);
   const configured = settingsStatus().filter((provider) => provider.configured);
   console.log(
     configured.length > 0
