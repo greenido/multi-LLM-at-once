@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Navbar from './components/Navbar.jsx';
 import ContextBar from './components/ContextBar.jsx';
 import ModelPanel from './components/ModelPanel.jsx';
@@ -6,9 +6,14 @@ import ModelPicker from './components/ModelPicker.jsx';
 import QueryBar from './components/QueryBar.jsx';
 import { MAX_SELECTED, defaultSelection, fetchModels } from './lib/models.js';
 import { load, save } from './lib/storage.js';
+import { streamQuery } from './lib/stream.js';
 import { buildExport, downloadText, exportFilename } from './lib/transcript.js';
 
 const SELECTION_KEY = 'multi-llm.selected-models';
+
+// Tokens can arrive faster than it is worth re-rendering for, so chunks are
+// coalesced into at most one state update per this many milliseconds.
+const FLUSH_INTERVAL_MS = 60;
 
 // Static strings so Tailwind keeps these classes; four models read best as 2x2.
 const GRID_COLUMNS = {
@@ -30,6 +35,9 @@ export default function App() {
   const [transcripts, setTranscripts] = useState({});
   // modelId -> timestamp the in-flight request started, or undefined when idle.
   const [startedAt, setStartedAt] = useState({});
+
+  // modelId -> AbortController for the in-flight request.
+  const controllers = useRef(new Map());
 
   const selected = useMemo(
     () => selectedIds.map((id) => available.find((model) => model.id === id)).filter(Boolean),
@@ -63,6 +71,12 @@ export default function App() {
     loadRegistry();
   }, [loadRegistry]);
 
+  // Leaving the page should not leave requests running against the daemon.
+  useEffect(() => () => {
+    controllers.current.forEach((controller) => controller.abort());
+    controllers.current.clear();
+  }, []);
+
   function toggleModel(id) {
     setSelectedIds((prev) => {
       const next = prev.includes(id)
@@ -77,6 +91,19 @@ export default function App() {
     setTranscripts((prev) => ({ ...prev, [modelId]: [...(prev[modelId] ?? []), turn] }));
   }
 
+  /** Patch the newest turn of a transcript, used to grow a streaming answer. */
+  function patchLastTurn(modelId, patch) {
+    setTranscripts((prev) => {
+      const turns = prev[modelId] ?? [];
+      if (turns.length === 0) return prev;
+      const last = turns[turns.length - 1];
+      return {
+        ...prev,
+        [modelId]: [...turns.slice(0, -1), { ...last, ...patch(last) }],
+      };
+    });
+  }
+
   async function saveContext() {
     await fetch('/set-context', {
       method: 'POST',
@@ -89,27 +116,54 @@ export default function App() {
 
   async function ask(model, text) {
     const begunAt = Date.now();
+    const controller = new AbortController();
+    controllers.current.set(model.id, controller);
     setStartedAt((prev) => ({ ...prev, [model.id]: begunAt }));
+
+    // The turn the tokens stream into.
+    appendTurn(model.id, { role: 'assistant', text: '', streaming: true });
+
+    let pending = '';
+    let lastFlush = 0;
+    const flush = () => {
+      if (!pending) return;
+      const chunk = pending;
+      pending = '';
+      patchLastTurn(model.id, (last) => ({ text: last.text + chunk }));
+    };
+
     try {
-      const response = await fetch('/query', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: model.id, query: text }),
+      await streamQuery({
+        model: model.id,
+        query: text,
+        signal: controller.signal,
+        onChunk: (chunk) => {
+          pending += chunk;
+          const now = performance.now();
+          if (now - lastFlush >= FLUSH_INTERVAL_MS) {
+            lastFlush = now;
+            flush();
+          }
+        },
       });
-      const data = await response.json().catch(() => ({}));
-
-      // Surface what the server actually said instead of a generic string.
-      if (!response.ok || data.error) {
-        throw new Error(data.error || `Request failed with HTTP ${response.status}`);
-      }
-      if (typeof data.response !== 'string') {
-        throw new Error('The server returned no response text.');
-      }
-
-      appendTurn(model.id, { role: 'assistant', text: data.response, ms: Date.now() - begunAt });
+      flush();
+      patchLastTurn(model.id, () => ({ streaming: false, ms: Date.now() - begunAt }));
     } catch (error) {
-      appendTurn(model.id, { role: 'error', text: error.message, ms: Date.now() - begunAt });
+      flush();
+      const cancelled = error.name === 'AbortError';
+      patchLastTurn(model.id, (last) => ({
+        streaming: false,
+        ms: Date.now() - begunAt,
+        // A cancelled answer keeps whatever streamed in; a failure with no
+        // text at all becomes the error itself.
+        role: cancelled || last.text ? last.role : 'error',
+        text: cancelled
+          ? `${last.text}${last.text ? '\n' : ''}[stopped]`
+          : last.text || error.message,
+        note: !cancelled && last.text ? error.message : undefined,
+      }));
     } finally {
+      controllers.current.delete(model.id);
       // In finally, so a throw anywhere above still clears the spinner.
       setStartedAt((prev) => ({ ...prev, [model.id]: undefined }));
     }
@@ -124,6 +178,10 @@ export default function App() {
     // Every model starts now. Wall time is the slowest model, not the sum of
     // all of them, and one model failing does not hold up the others.
     await Promise.allSettled(selected.map((model) => ask(model, text)));
+  }
+
+  function stop() {
+    controllers.current.forEach((controller) => controller.abort());
   }
 
   function copy(text) {
@@ -183,7 +241,9 @@ export default function App() {
           value={query}
           onChange={setQuery}
           onSend={send}
-          disabled={anyRunning || selected.length === 0}
+          onStop={stop}
+          running={anyRunning}
+          disabled={selected.length === 0}
         />
       </main>
     </div>
