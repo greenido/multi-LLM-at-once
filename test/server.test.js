@@ -44,6 +44,10 @@ before(async () => {
       ANTHROPIC_API_KEY: '',
       GEMINI_API_KEY: '',
       XAI_API_KEY: '',
+      OPENROUTER_API_KEY: '',
+      GROQ_API_KEY: '',
+      MISTRAL_API_KEY: '',
+      DEEPSEEK_API_KEY: '',
     },
     stdio: 'ignore',
   });
@@ -180,7 +184,9 @@ describe('a provider with no key', () => {
 describe('the settings routes', () => {
   it('lists the providers that take a key, and only those', async () => {
     const providers = await settings();
-    assert.deepEqual(providers.map((provider) => provider.id), ['openai', 'anthropic', 'gemini', 'xai']);
+    assert.deepEqual(providers.map((provider) => provider.id), [
+      'openai', 'anthropic', 'gemini', 'xai', 'openrouter', 'groq', 'mistral', 'deepseek',
+    ]);
   });
 
   it('stores a key and reports it as configured', async () => {

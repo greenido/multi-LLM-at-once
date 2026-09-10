@@ -35,12 +35,16 @@ report() {
 # sk-test-000000000000000000000000004f2a, and a check that cries wolf at its
 # own fixtures is one people learn to ignore.
 #
-# One "label|regex" per line. Labels carry no pipe.
+# One "label|regex" per line. Labels carry no pipe. Mistral's keys have no
+# prefix to recognise them by, so they are not on the list.
 PATTERNS='OpenAI project key|sk-proj-[A-Za-z0-9_-]{20,}
 OpenAI key|sk-[A-Za-z0-9]{40,}
 Anthropic key|sk-ant-[A-Za-z0-9_-]{20,}
 Google API key|AIza[A-Za-z0-9_-]{30,}
 xAI key|xai-[A-Za-z0-9]{20,}
+OpenRouter key|sk-or-v1-[A-Za-z0-9]{32,}
+Groq key|gsk_[A-Za-z0-9]{40,}
+DeepSeek key|sk-[a-f0-9]{32}([^A-Za-z0-9]|$)
 AWS access key id|AKIA[A-Z0-9]{16}
 private key block|-----BEGIN [A-Z ]*PRIVATE KEY-----'
 

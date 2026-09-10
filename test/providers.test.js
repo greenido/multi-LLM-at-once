@@ -5,7 +5,7 @@ import { after, before, describe, it } from 'node:test';
 import { anthropic } from '../server/providers/anthropic.mjs';
 import { gemini } from '../server/providers/gemini.mjs';
 import { ollama } from '../server/providers/ollama.mjs';
-import { openai, xai } from '../server/providers/openai.mjs';
+import { deepseek, groq, mistral, openai, openrouter, xai } from '../server/providers/openai.mjs';
 
 /**
  * Each cloud provider speaks a different dialect, and the adapters exist to
@@ -68,6 +68,43 @@ before(async () => {
       }
       if (dialect === 'xai') {
         return json(res, { data: [{ id: 'grok-3' }, { id: 'grok-3-mini' }, { id: 'grok-2-image' }] });
+      }
+      if (dialect === 'groq') {
+        return json(res, {
+          data: [
+            { id: 'llama-3.3-70b-versatile', active: true },
+            // "instruct" does not mean what it means at OpenAI: this one chats.
+            { id: 'meta-llama/llama-4-scout-17b-16e-instruct', active: true },
+            { id: 'whisper-large-v3', active: true },
+            { id: 'playai-tts', active: true },
+            { id: 'meta-llama/llama-guard-4-12b', active: true },
+            { id: 'retired-model', active: false },
+          ],
+        });
+      }
+      if (dialect === 'mistral') {
+        return json(res, {
+          data: [
+            { id: 'mistral-large-latest', capabilities: { completion_chat: true } },
+            { id: 'mistral-small-latest', capabilities: { completion_chat: true } },
+            { id: 'mistral-embed', capabilities: { completion_chat: false } },
+            { id: 'mistral-ocr-latest', capabilities: { completion_chat: false } },
+          ],
+        });
+      }
+      if (dialect === 'deepseek') {
+        return json(res, { data: [{ id: 'deepseek-reasoner' }, { id: 'deepseek-chat' }] });
+      }
+      if (dialect === 'openrouter') {
+        return json(res, {
+          data: [
+            { id: 'openai/gpt-4o', pricing: { prompt: '0.0000025', completion: '0.00001' }, architecture: { output_modalities: ['text'] } },
+            { id: 'meta-llama/llama-3.3-70b-instruct:free', pricing: { prompt: '0', completion: '0' }, architecture: { output_modalities: ['text'] } },
+            // A router whose price depends on where it sends you.
+            { id: 'openrouter/auto', pricing: { prompt: '-1', completion: '-1' }, architecture: { output_modalities: ['text'] } },
+            { id: 'black-forest-labs/flux-pro', pricing: { prompt: '0', completion: '0.04' }, architecture: { output_modalities: ['image'] } },
+          ],
+        });
       }
       return json(res, {
         data: [
@@ -135,8 +172,19 @@ before(async () => {
       ]));
     }
 
+    // Groq's counts, and its own timing, ride on the last frame under x_groq.
+    if (dialect === 'groq') {
+      return res.end(sse([
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'Hello ' } }] })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'there' } }], x_groq: { usage: { prompt_tokens: 111, completion_tokens: 222, completion_time: 0.5 } } })}`,
+        'data: [DONE]',
+      ]));
+    }
+
     // OpenAI counts reasoning inside completion_tokens; Grok beside it.
     let usage = { prompt_tokens: 111, completion_tokens: 222 };
+    // OpenRouter, asked, says what the answer cost.
+    if (dialect === 'openrouter') usage = { ...usage, cost: 0.0042 };
     if (reasoning && dialect === 'openai') {
       usage = { prompt_tokens: 111, completion_tokens: 1222, total_tokens: 1333, completion_tokens_details: { reasoning_tokens: 1000 } };
     }
@@ -159,6 +207,10 @@ before(async () => {
   process.env.GEMINI_BASE_URL = `${base}/gemini`;
   process.env.XAI_BASE_URL = `${base}/xai`;
   process.env.OLLAMA_URL = `${base}/ollama`;
+  process.env.GROQ_BASE_URL = `${base}/groq`;
+  process.env.MISTRAL_BASE_URL = `${base}/mistral`;
+  process.env.DEEPSEEK_BASE_URL = `${base}/deepseek`;
+  process.env.OPENROUTER_BASE_URL = `${base}/openrouter`;
 });
 
 after(() => server?.close());
@@ -202,14 +254,36 @@ describe('listing models', () => {
   it('Anthropic keeps everything, since that endpoint lists only chat models', async () => {
     assert.deepEqual(await anthropic.listModels(KEY), ['claude-haiku-4-5', 'claude-sonnet-4-5']);
   });
+
+  it('Groq drops speech, safety and retired models, but keeps an instruct model', async () => {
+    assert.deepEqual(await groq.listModels(KEY), [
+      'llama-3.3-70b-versatile', 'meta-llama/llama-4-scout-17b-16e-instruct',
+    ]);
+  });
+
+  it('Mistral asks the listing which models can chat', async () => {
+    assert.deepEqual(await mistral.listModels(KEY), ['mistral-large-latest', 'mistral-small-latest']);
+  });
+
+  it('DeepSeek keeps everything it lists', async () => {
+    assert.deepEqual(await deepseek.listModels(KEY), ['deepseek-chat', 'deepseek-reasoner']);
+  });
+
+  it('OpenRouter keeps text models with their price per token, and none where the price varies', async () => {
+    assert.deepEqual(await openrouter.listModels(KEY), [
+      { name: 'meta-llama/llama-3.3-70b-instruct:free', pricing: { prompt: 0, completion: 0 } },
+      { name: 'openai/gpt-4o', pricing: { prompt: 0.0000025, completion: 0.00001 } },
+      { name: 'openrouter/auto' },
+    ]);
+  });
 });
 
 describe('authenticating', () => {
-  it('OpenAI and Grok use a bearer token', async () => {
-    await openai.listModels(KEY);
-    assert.equal(seen.headers.authorization, `Bearer ${KEY}`);
-    await xai.listModels(KEY);
-    assert.equal(seen.headers.authorization, `Bearer ${KEY}`);
+  it('OpenAI and everyone who speaks its API use a bearer token', async () => {
+    for (const provider of [openai, xai, groq, mistral, deepseek, openrouter]) {
+      await provider.listModels(KEY);
+      assert.equal(seen.headers.authorization, `Bearer ${KEY}`, provider.label);
+    }
   });
 
   it('Anthropic uses x-api-key, and pins the API version', async () => {
@@ -225,7 +299,9 @@ describe('authenticating', () => {
 });
 
 describe('streaming an answer', () => {
-  for (const [name, provider] of [['OpenAI', openai], ['Grok', xai], ['Anthropic', anthropic], ['Gemini', gemini]]) {
+  for (const [name, provider] of [
+    ['OpenAI', openai], ['Grok', xai], ['Anthropic', anthropic], ['Gemini', gemini], ['Mistral', mistral], ['DeepSeek', deepseek],
+  ]) {
     it(`${name} yields the text and the token counts`, async () => {
       const { text, usage } = await drain(provider);
       assert.equal(text, 'Hello there');
@@ -241,6 +317,17 @@ describe('streaming an answer', () => {
   it('Gemini joins several parts within one frame', async () => {
     const { text } = await drain(gemini);
     assert.equal(text, 'Hello there');
+  });
+
+  it("Groq's counts arrive under x_groq, with its own decode time", async () => {
+    const { text, usage } = await drain(groq);
+    assert.equal(text, 'Hello there');
+    assert.deepEqual(usage, { promptTokens: 111, completionTokens: 222, evalMs: 500 });
+  });
+
+  it('OpenRouter reports what the answer cost', async () => {
+    const { usage } = await drain(openrouter);
+    assert.deepEqual(usage, { promptTokens: 111, completionTokens: 222, costUsd: 0.0042 });
   });
 
   it('Ollama yields the text, the token counts and its own timings, in milliseconds', async () => {
@@ -341,6 +428,21 @@ describe('sending the conversation', () => {
   it('OpenAI must opt in to usage or the counts never arrive', async () => {
     await drain(openai);
     assert.equal(seen.body.stream_options.include_usage, true);
+  });
+
+  it('Mistral is not sent stream_options, which its API does not document', async () => {
+    await drain(mistral);
+    assert.equal('stream_options' in seen.body, false);
+  });
+
+  it('OpenRouter is asked to report the cost', async () => {
+    await drain(openrouter);
+    assert.deepEqual(seen.body.usage, { include: true });
+  });
+
+  it('nobody else is sent OpenRouter\'s cost request', async () => {
+    await drain(groq);
+    assert.equal('usage' in seen.body, false);
   });
 
   it('Gemini asks for SSE explicitly, or the response is a JSON array', async () => {

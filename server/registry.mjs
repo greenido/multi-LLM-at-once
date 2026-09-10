@@ -12,10 +12,10 @@
 import { anthropic } from './providers/anthropic.mjs';
 import { gemini } from './providers/gemini.mjs';
 import { ollama } from './providers/ollama.mjs';
-import { openai, xai } from './providers/openai.mjs';
+import { deepseek, groq, mistral, openai, openrouter, xai } from './providers/openai.mjs';
 import { getKey, keyStatus } from './keystore.mjs';
 
-export const PROVIDERS = [ollama, openai, anthropic, gemini, xai];
+export const PROVIDERS = [ollama, openai, anthropic, gemini, xai, openrouter, groq, mistral, deepseek];
 const BY_ID = new Map(PROVIDERS.map((provider) => [provider.id, provider]));
 
 export const getProvider = (id) => BY_ID.get(id) ?? null;
@@ -35,6 +35,12 @@ export function parseModelId(id) {
 }
 
 export const modelId = (providerId, name) => `${providerId}:${name}`;
+
+/**
+ * A listing is a list of names, or of { name, pricing } where the provider
+ * publishes prices. Held in the second shape either way.
+ */
+const toEntry = (model) => (typeof model === 'string' ? { name: model } : model);
 
 //
 // A model list costs a round trip, and the picker asks for one on every load.
@@ -63,12 +69,12 @@ async function listProvider(provider) {
     result = { models: [], error: null, configured: false };
   } else {
     try {
-      result = { models: await provider.listModels(key), error: null, configured: true };
+      result = { models: (await provider.listModels(key)).map(toEntry), error: null, configured: true };
     } catch (error) {
       // A failed listing should not empty the picker. The curated fallback keeps
       // the provider usable, and the error rides along so the UI can say why the
       // list may be incomplete.
-      result = { models: provider.fallbackModels, error: error.message, configured: true };
+      result = { models: provider.fallbackModels.map(toEntry), error: error.message, configured: true };
     }
   }
 
@@ -89,8 +95,8 @@ export async function listAll() {
   const providers = [];
 
   for (const [provider, result] of results) {
-    for (const name of result.models) {
-      models.push({ id: modelId(provider.id, name), provider: provider.id, name });
+    for (const { name, pricing } of result.models) {
+      models.push({ id: modelId(provider.id, name), provider: provider.id, name, ...(pricing ? { pricing } : {}) });
     }
     providers.push({
       id: provider.id,
@@ -118,7 +124,7 @@ export async function checkAvailability(id) {
   const provider = getProvider(parsed.provider);
   const { models, error } = await listProvider(provider);
 
-  if (models.includes(parsed.name)) return { ok: true };
+  if (models.some((model) => model.name === parsed.name)) return { ok: true };
   if (error) return { ok: false, status: 503, error };
   return {
     ok: false,

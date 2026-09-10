@@ -32,6 +32,14 @@ describe('parseModelId', () => {
   });
 });
 
+describe('toModel', () => {
+  it('keeps a price where the provider published one, and adds none where it did not', () => {
+    const pricing = { prompt: 0.000003, completion: 0.000015 };
+    assert.deepEqual(toModel({ id: 'openrouter:x/y', provider: 'openrouter', name: 'x/y', pricing }).pricing, pricing);
+    assert.equal('pricing' in model('openai:gpt-4o'), false);
+  });
+});
+
 describe('prettyLabel', () => {
   it('strips the implicit :latest tag', () => {
     assert.equal(prettyLabel('llama3:latest'), 'llama3');
@@ -75,6 +83,13 @@ describe('defaultSelection', () => {
   it('ranks cloud models too, so a cloud-only setup gets sensible defaults', () => {
     const selected = defaultSelection(models('xai:grok-3', 'openai:gpt-4o', 'gemini:gemini-2.5-flash'));
     assert.deepEqual(selected, ['openai:gpt-4o', 'gemini:gemini-2.5-flash']);
+  });
+
+  it("reads past a reseller's maker prefix, or OpenRouter alone would default to 01-ai", () => {
+    const selected = defaultSelection(
+      models('openrouter:01-ai/yi-large', 'openrouter:openai/gpt-4o', 'openrouter:anthropic/claude-sonnet-4.5'),
+    );
+    assert.deepEqual(selected, ['openrouter:openai/gpt-4o', 'openrouter:anthropic/claude-sonnet-4.5']);
   });
 
   it('falls back to whatever is available when nothing is preferred', () => {
