@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef } from 'react';
 import Markdown from './Markdown.jsx';
-import { totalTokens, transcriptToText } from '../lib/transcript.js';
+import { modelToMarkdown, totalTokens } from '../lib/transcript.js';
 import { formatDuration, useElapsed } from '../lib/duration.js';
 import { formatTokens, turnStats } from '../lib/metrics.js';
 import { isAtBottom } from '../lib/scroll.js';
@@ -79,8 +79,9 @@ const Turn = memo(function Turn({ turn }) {
   );
 });
 
-function ModelPanel({ model, turns, startedAt, onCopy }) {
+function ModelPanel({ model, turns, startedAt, onCopy, onRetry }) {
   const running = Boolean(startedAt);
+  const asked = turns.some((turn) => turn.role === 'user');
 
   // Cloud models bill by the token, so the panel keeps a running total.
   const total = totalTokens(turns);
@@ -129,10 +130,20 @@ function ModelPanel({ model, turns, startedAt, onCopy }) {
 
         <button
           type="button"
-          onClick={() => onCopy(transcriptToText(turns))}
-          disabled={turns.length === 0}
-          title="Copy to clipboard"
+          onClick={() => onRetry(model)}
+          disabled={running || !asked}
+          title={`Ask ${model.label} the last question again, replacing its answer. The other panels are not re-asked.`}
           className="ml-auto rounded-md px-2 py-1 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Retry
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onCopy(modelToMarkdown(model, turns))}
+          disabled={turns.length === 0}
+          title="Copy this conversation as Markdown"
+          className="rounded-md px-2 py-1 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
         >
           Copy
         </button>
