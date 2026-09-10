@@ -18,6 +18,10 @@ const SYSTEM_KEY = 'multi-llm.system-prompt';
 // coalesced into at most one state update per this many milliseconds.
 const FLUSH_INTERVAL_MS = 60;
 
+// One shared empty array, so a panel with no transcript yet keeps a stable
+// prop and stays memoized like the rest.
+const NO_TURNS = [];
+
 // Static strings so Tailwind keeps these classes; four models read best as 2x2.
 const GRID_COLUMNS = {
   1: 'grid-cols-1',
@@ -245,11 +249,12 @@ export default function App() {
     controllers.current.forEach((controller) => controller.abort());
   }
 
-  function copy(text) {
+  // Stable, so a panel streaming tokens does not re-render the ones beside it.
+  const copy = useCallback((text) => {
     navigator.clipboard.writeText(text).catch((error) => {
       console.error('Failed to copy text:', error);
     });
-  }
+  }, []);
 
   return (
     <div className="flex h-full flex-col">
@@ -316,7 +321,7 @@ export default function App() {
               <ModelPanel
                 key={model.id}
                 model={model}
-                turns={transcripts[model.id] ?? []}
+                turns={transcripts[model.id] ?? NO_TURNS}
                 startedAt={startedAt[model.id]}
                 onCopy={copy}
               />
