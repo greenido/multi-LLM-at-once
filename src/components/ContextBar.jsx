@@ -1,6 +1,7 @@
 import GrowingTextarea from './GrowingTextarea.jsx';
+import PromptMenu from './PromptMenu.jsx';
 
-export default function ContextBar({ value, onChange, onClear, canClear }) {
+export default function ContextBar({ value, onChange, onClear, canClear, prompts, onSavePrompt, onDeletePrompt }) {
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
       <div className="min-w-0 flex-1">
@@ -13,6 +14,14 @@ export default function ContextBar({ value, onChange, onClear, canClear }) {
           className="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm outline-none transition placeholder:text-slate-400 focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
         />
       </div>
+      <PromptMenu
+        kind="system"
+        prompts={prompts}
+        current={value}
+        onPick={onChange}
+        onSave={(name, text) => onSavePrompt('system', name, text)}
+        onDelete={onDeletePrompt}
+      />
       <button
         type="button"
         onClick={onClear}

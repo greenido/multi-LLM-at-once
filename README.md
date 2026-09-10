@@ -52,6 +52,15 @@ https://greenido.wordpress.com/2024/04/08/the-power-of-many-why-you-should-consi
 - **A system prompt** applied to every model, so you compare them under the
   same instruction. It and your model selection are remembered across reloads;
   **New chat** clears every panel without touching either.
+- **History.** Every comparison is saved as soon as its answers are in —
+  question, answers, system prompt, panels and all. **History** lists them
+  newest first and searches every question and answer. Open one and its panels
+  come back as they were; ask a follow-up and it carries on, and moves back to
+  the top. They are kept on the server, in SQLite — see below.
+- **Saved prompts.** A **Prompts** menu beside the system prompt and beside the
+  question box keeps named system prompts and questions to reuse — a few to
+  start from, and whatever you save. Picking a question puts it in the box; it
+  is not sent until you send it.
 - Answers render as markdown — tables, fenced code and lists read as
   themselves. **Export** and **Copy** give you a Markdown document: the system
   prompt, each model's exact id, every answer as written, and the timings and
@@ -124,6 +133,11 @@ Where they live, and what that does and does not protect:
   bodies are parsed, which makes every route preflighted, and a state-changing
   request carrying an `Origin` that is not the app's own is refused. Add
   `ALLOWED_ORIGINS` if you serve the UI from somewhere else.
+- Nor can it read your history through DNS rebinding — re-pointing its own
+  domain at `127.0.0.1` so the browser treats this server as that page's
+  origin. While the server listens on loopback it answers only to `localhost`,
+  `127.0.0.1`, `[::1]` and `*.localhost`; add any other name you reach it by
+  to `ALLOWED_HOSTS`.
 
 If you would rather not type a key into a web page at all, set it in the
 server's environment instead and the modal will show it as configured and
@@ -136,6 +150,19 @@ OPENAI_API_KEY=… ANTHROPIC_API_KEY=… GEMINI_API_KEY=… XAI_API_KEY=… npm 
 A key stored through the modal takes precedence over the environment, so you can
 override a deployment default without restarting.
 
+## History
+
+Comparisons and saved prompts are kept in `data/history.db`, a second SQLite
+file — separate from the keys, so history can be copied, backed up or deleted
+without them. It gets the same treatment: mode `0600`, ignored by git, and
+**plaintext**, so treat it like the conversations it holds. Delete a
+comparison from **History**, or the whole file to start over.
+
+A comparison is saved each time an exchange finishes, never mid-stream, and
+only when something changed — opening one to read it does not move it to the
+top. An exchange still streaming when you start a new chat or open another
+comparison is abandoned rather than saved, as **New chat** always did.
+
 ## Tests
 
 ```bash
@@ -144,8 +171,9 @@ npm test
 
 Unit tests cover the transcript and history logic, the Markdown export, the
 timing and speed metrics, the model registry, the streaming NDJSON parser, the
-SSE reader, the key store, the storage wrapper, the stick-to-bottom rule the
-panels scroll by and the Enter-to-send rule the prompt box follows.
+SSE reader, the key store, the history store, the storage wrapper, the
+stick-to-bottom rule the panels scroll by and the Enter-to-send rule the prompt
+box follows.
 
 `providers.test.js` stands a stub in front of the adapters that answers in
 each provider's real wire format — Ollama's included — and asserts both
@@ -153,8 +181,9 @@ directions: that their frames parse, and that the API key, the system prompt
 and the history go where each API expects them. It also pins down how each
 provider reports a reasoning model's hidden tokens, which three of them do in
 three different ways. The server tests boot the real server and cover
-request validation, the settings routes, the unreachable-provider paths and the
-cross-site requests that must not reach a provider.
+request validation, the settings, history and prompt routes, the
+unreachable-provider paths, the cross-site requests that must not reach a
+provider, and requests addressed to a name that is not this machine.
 
 No test reaches a real provider, and none needs Ollama running.
 
@@ -185,10 +214,12 @@ All optional.
 | `PORT` | `3000` | Port the API listens on. |
 | `HOST` | `127.0.0.1` | Address to bind. `0.0.0.0` exposes it to the network — see the warning above. |
 | `ALLOWED_ORIGINS` | — | Comma-separated extra origins allowed to POST, for a UI served elsewhere. |
+| `ALLOWED_HOSTS` | — | Comma-separated extra host names to answer to while bound to loopback. |
 | `OLLAMA_URL` | `http://localhost:11434` | Where to reach Ollama. |
 | `QUERY_TIMEOUT_MS` | `120000` | Abort a model that never finishes. |
 | `NODE_ENV` | — | Set to `production` to serve `dist/`. |
 | `KEYS_DB` | `data/keys.db` | Where the API keys are stored. |
+| `HISTORY_DB` | `data/history.db` | Where saved comparisons and prompts are stored. |
 | `OPENAI_API_KEY` etc. | — | A key supplied by the environment instead of the modal. |
 | `ANTHROPIC_MAX_TOKENS` | `4096` | Anthropic requires a cap on every request. |
 | `OPENAI_BASE_URL` etc. | the provider | Point an adapter somewhere else — a proxy, or a stub. |
@@ -199,20 +230,25 @@ All optional.
 index.html            Vite entry
 src/App.jsx           state: models, selection, transcripts, in-flight requests
 src/components/       Navbar, ContextBar, ModelPicker, ModelPanel, QueryBar,
-                      GrowingTextarea, SettingsModal, Markdown
-src/lib/              models (catalogue), settings (keys), transcript (history,
-                      export), metrics (timings, speed), stream (NDJSON),
+                      GrowingTextarea, HistoryPanel, PromptMenu, DeleteButton,
+                      SettingsModal, Markdown
+src/lib/              models (catalogue), settings (keys), history (saved
+                      comparisons and prompts), transcript (what is sent back,
+                      export), metrics (timings, speed), stream (NDJSON), api,
                       duration, storage, scroll (stick-to-bottom), keyboard
 server.mjs            Express API and routing
 server/keystore.mjs   API keys in SQLite, masked on the way out
+server/historystore.mjs  saved comparisons and prompts in SQLite
 server/registry.mjs   every provider's models under one namespaced list
 server/providers/     one adapter per provider, plus the shared SSE reader
 test/                 node:test suites
 ```
 
-The server keeps no conversation state. The browser owns the transcript and
-sends it whole with each request, so two tabs cannot clobber each other. The
-only thing the server persists is the API keys.
+The browser owns the live conversation and sends it whole with each request,
+so the query path keeps no state. What the server persists is the API keys
+and, separately, history: a copy of each conversation, saved under an id the
+browser picked when it started — so saving again replaces it, and two tabs
+each write their own.
 
 Every provider sits behind one adapter interface — `listModels(key)` and an
 async-generator `chat()` — so the differences between four REST APIs (bearer
@@ -254,6 +290,13 @@ The settings routes are `GET /api/settings`, `PUT`/`DELETE
 /api/settings/:provider` and `POST /api/settings/:provider/test`. None of them
 returns a key.
 
+History is `GET /api/comparisons` (newest first; `?q=` searches questions and
+answers), and `GET`/`PUT`/`DELETE /api/comparisons/:id`. A comparison is
+`{ title, system, models, transcripts }`, where `transcripts` maps each model id
+to its turns; the server checks their shape and stores them as sent. Saved
+prompts are `GET /api/prompts`, `POST /api/prompts` with `{ kind, name, text }`
+— `kind` is `system` or `question` — and `DELETE /api/prompts/:id`.
+
 ## Ideas / not done yet
 
 - [x] Add timers per model
@@ -261,8 +304,8 @@ returns a key.
 - [x] Enable to export to file
 - [x] Stream responses instead of waiting for the whole completion
 - [x] Keep conversation history so follow-ups work
-- [ ] Add more query options / pre-defined queries
-- [ ] Save and reload past comparisons
+- [x] Add more query options / pre-defined queries
+- [x] Save and reload past comparisons
 - [x] Show tokens/sec alongside the wall-clock timer
 - [ ] Allow to leverage [llama_index](https://github.com/run-llama/llama_index)
 

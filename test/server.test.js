@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { rmSync } from 'node:fs';
+import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -18,6 +19,7 @@ import { after, before, describe, it } from 'node:test';
 const PORT = 3987;
 const BASE = `http://127.0.0.1:${PORT}`;
 const DB = join(tmpdir(), `multi-llm-test-${process.pid}.db`);
+const HISTORY = join(tmpdir(), `multi-llm-test-history-${process.pid}.db`);
 
 // Invented values — never a real credential.
 const KEY = 'sk-test-000000000000000000000000004f2a';
@@ -26,11 +28,15 @@ let server;
 
 before(async () => {
   rmSync(DB, { force: true });
+  rmSync(HISTORY, { force: true });
   server = spawn(process.execPath, ['server.mjs'], {
     env: {
       ...process.env,
       PORT: String(PORT),
       KEYS_DB: DB,
+      HISTORY_DB: HISTORY,
+      HOST: '127.0.0.1',
+      ALLOWED_HOSTS: 'llm.test',
       OLLAMA_URL: 'http://127.0.0.1:1',
       NODE_ENV: 'test',
       // Cloud providers must be unconfigured at the start of the run.
@@ -56,6 +62,7 @@ before(async () => {
 after(() => {
   server?.kill();
   rmSync(DB, { force: true });
+  rmSync(HISTORY, { force: true });
 });
 
 const post = (body) =>
@@ -245,6 +252,149 @@ describe('the settings routes', () => {
     });
     assert.equal(res.status, 400);
     assert.match((await res.json()).error, /No key is set/i);
+  });
+});
+
+describe('saved comparisons', () => {
+  const ID = 'cmp00000000000000000000000000042';
+  const comparison = {
+    title: 'Why is the sky blue?',
+    system: 'Be terse.',
+    models: ['openai:gpt-4o'],
+    transcripts: {
+      'openai:gpt-4o': [
+        { role: 'user', text: 'Why is the sky blue?' },
+        { role: 'assistant', text: 'Rayleigh scattering.', ms: 900 },
+      ],
+    },
+  };
+  const put = (id, body, headers = {}) =>
+    fetch(`${BASE}/api/comparisons/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    });
+
+  it('saves one under the id the browser chose, and lists it', async () => {
+    const res = await put(ID, comparison);
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).comparison.questions, 1);
+
+    const { comparisons } = await (await fetch(`${BASE}/api/comparisons`)).json();
+    assert.deepEqual(comparisons.map((item) => item.id), [ID]);
+  });
+
+  it('opens it again exactly as it was saved', async () => {
+    const { comparison: saved } = await (await fetch(`${BASE}/api/comparisons/${ID}`)).json();
+    assert.deepEqual(saved.transcripts, comparison.transcripts);
+    assert.equal(saved.system, 'Be terse.');
+  });
+
+  it('finds it by what was asked or answered', async () => {
+    const hits = async (q) =>
+      (await (await fetch(`${BASE}/api/comparisons?q=${encodeURIComponent(q)}`)).json()).comparisons.length;
+    assert.equal(await hits('Rayleigh'), 1);
+    assert.equal(await hits('nothing like it'), 0);
+  });
+
+  it('takes a comparison far bigger than a query is allowed to be', async () => {
+    const long = { role: 'assistant', text: 'x'.repeat(3 * 1024 * 1024) };
+    const res = await put('cmp-big-0000000000', {
+      ...comparison,
+      transcripts: { 'openai:gpt-4o': [comparison.transcripts['openai:gpt-4o'][0], long] },
+    });
+    assert.equal(res.status, 200);
+  });
+
+  it('refuses a malformed one, saying why', async () => {
+    const res = await put(ID, { ...comparison, transcripts: { m: [{ role: 'system', text: 'x' }] } });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /role of user, assistant or error/);
+  });
+
+  it('refuses an id that is not one', async () => {
+    assert.equal((await put('no', comparison)).status, 400);
+    assert.equal((await fetch(`${BASE}/api/comparisons/..%2F..%2Fetc`)).status, 400);
+  });
+
+  it('404s one that does not exist', async () => {
+    assert.equal((await fetch(`${BASE}/api/comparisons/cmp-missing-000000`)).status, 404);
+  });
+
+  it('will not let another site write one', async () => {
+    assert.equal((await put(ID, comparison, { Origin: 'https://evil.example' })).status, 403);
+  });
+
+  it('deletes one', async () => {
+    const res = await fetch(`${BASE}/api/comparisons/${ID}`, { method: 'DELETE' });
+    assert.deepEqual(await res.json(), { deleted: true });
+    assert.equal((await fetch(`${BASE}/api/comparisons/${ID}`)).status, 404);
+  });
+});
+
+describe('saved prompts', () => {
+  const create = (body) =>
+    fetch(`${BASE}/api/prompts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('starts with a few of each kind', async () => {
+    const { prompts } = await (await fetch(`${BASE}/api/prompts`)).json();
+    assert.ok(prompts.some((prompt) => prompt.kind === 'system'));
+    assert.ok(prompts.some((prompt) => prompt.kind === 'question'));
+  });
+
+  it('saves a new one and deletes it again', async () => {
+    const res = await create({ kind: 'question', name: 'Haiku', text: 'Write a haiku about SQLite.' });
+    assert.equal(res.status, 201);
+    const { prompt } = await res.json();
+
+    const removed = await fetch(`${BASE}/api/prompts/${prompt.id}`, { method: 'DELETE' });
+    assert.deepEqual(await removed.json(), { deleted: true });
+  });
+
+  it('refuses one that is missing its text', async () => {
+    const res = await create({ kind: 'system', name: 'Empty', text: '   ' });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /cannot be empty/);
+  });
+});
+
+/**
+ * DNS rebinding: a page can re-point its own name at 127.0.0.1, which makes
+ * this server its origin — the Origin check passes and responses are readable.
+ * The Host header still carries the page's name, so that is what is checked.
+ * fetch will not set Host, so these go through node:http.
+ */
+describe('requests addressed to another name', () => {
+  const statusFor = (hostHeader) =>
+    new Promise((resolve, reject) => {
+      const req = request(
+        { host: '127.0.0.1', port: PORT, path: '/api/comparisons', headers: { Host: hostHeader } },
+        (res) => {
+          res.resume();
+          res.on('end', () => resolve(res.statusCode));
+        },
+      );
+      req.on('error', reject);
+      req.end();
+    });
+
+  it('refuses a name that is not this machine, even for a read', async () => {
+    assert.equal(await statusFor(`evil.example:${PORT}`), 403);
+  });
+
+  it('answers to the loopback names', async () => {
+    assert.equal(await statusFor(`localhost:${PORT}`), 200);
+    assert.equal(await statusFor(`127.0.0.1:${PORT}`), 200);
+    assert.equal(await statusFor(`[::1]:${PORT}`), 200);
+    assert.equal(await statusFor(`app.localhost:${PORT}`), 200);
+  });
+
+  it('answers to a name listed in ALLOWED_HOSTS', async () => {
+    assert.equal(await statusFor(`llm.test:${PORT}`), 200);
   });
 });
 

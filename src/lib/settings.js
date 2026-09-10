@@ -4,21 +4,7 @@
  * masked fragment like "sk-…4f2a" and source says whether the key came from the
  * database or from the server's environment.
  */
-
-async function request(url, options) {
-  const response = await fetch(url, options);
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error || `Request failed with HTTP ${response.status}`);
-  }
-  return data;
-}
-
-const asJson = (method, body) => ({
-  method,
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(body),
-});
+import { asJson, request } from './api.js';
 
 export async function fetchSettings() {
   const { providers = [] } = await request('/api/settings');
