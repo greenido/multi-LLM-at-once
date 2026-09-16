@@ -66,6 +66,22 @@ export function formatCost(usd) {
   return `$${usd < 1 ? usd.toFixed(4) : usd.toFixed(2)}`;
 }
 
+/** USD-per-token list price as "$0.15 / $0.60 per M", or "free". Null when unknown. */
+export function formatListPrice(pricing) {
+  if (!pricing) return null;
+  const { prompt, completion } = pricing;
+  if (prompt === 0 && completion === 0) return 'free';
+  return `${formatPerMillion(prompt)} / ${formatPerMillion(completion)} per M`;
+}
+
+function formatPerMillion(perToken) {
+  const perM = perToken * 1e6;
+  if (perM === 0) return '$0';
+  if (perM < 0.01) return `$${perM.toFixed(4)}`;
+  if (perM < 10) return `$${perM.toFixed(2)}`;
+  return `$${Math.round(perM)}`;
+}
+
 /** "1,234 in · 567 out", with " · $0.0042" when there is a cost to add. */
 export const formatSpend = (usage) =>
   typeof usage.costUsd === 'number' ? `${formatTokens(usage)} · ${formatCost(usage.costUsd)}` : formatTokens(usage);

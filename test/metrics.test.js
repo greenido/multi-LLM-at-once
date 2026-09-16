@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
   NOTABLE_LOAD_MS,
   formatCost,
+  formatListPrice,
   formatSpend,
   formatTokens,
   tokensPerSecond,
@@ -125,5 +126,12 @@ describe('what an answer cost', () => {
   it('rides along with the token counts', () => {
     assert.equal(formatSpend({ promptTokens: 9, completionTokens: 40, costUsd: 0.0012 }), '9 in · 40 out · $0.0012');
     assert.equal(formatSpend({ promptTokens: 9, completionTokens: 40 }), '9 in · 40 out');
+  });
+
+  it('turns a list price into free, or dollars per million tokens', () => {
+    assert.equal(formatListPrice(undefined), null);
+    assert.equal(formatListPrice({ prompt: 0, completion: 0 }), 'free');
+    assert.equal(formatListPrice({ prompt: 0.0000025, completion: 0.00001 }), '$2.50 / $10 per M');
+    assert.equal(formatListPrice({ prompt: 0.00000015, completion: 0.0000006 }), '$0.15 / $0.60 per M');
   });
 });
