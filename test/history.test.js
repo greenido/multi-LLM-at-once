@@ -60,6 +60,13 @@ describe('toSaved', () => {
   it('is null while nothing has been asked', () => {
     assert.equal(toSaved({ ...base, transcripts: {} }), null);
   });
+
+  it('keeps the verdict when there is one, without its streaming flag', () => {
+    const verdict = { judge: 'b:y', labels: ['a:x', 'c:z'], question: 'q', turn: answer('Both agree.', { streaming: false, ms: 9 }) };
+    const saved = toSaved({ ...base, transcripts: { a: [user('q'), answer('r')] }, verdict });
+    assert.deepEqual(saved.verdict, { ...verdict, turn: { role: 'assistant', text: 'Both agree.', ms: 9 } });
+    assert.equal('verdict' in toSaved({ ...base, transcripts: { a: [user('q'), answer('r')] } }), false);
+  });
 });
 
 describe('formatWhen', () => {

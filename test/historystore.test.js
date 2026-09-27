@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, it } from 'node:test';
@@ -77,6 +78,73 @@ describe('saving a comparison', () => {
     ];
     for (const input of bad) assert.throws(() => saveComparison(input), InvalidInput);
     assert.equal(listComparisons().length, 0);
+  });
+});
+
+describe('a verdict', () => {
+  const verdict = {
+    judge: 'anthropic:claude-opus-5',
+    labels: ['openai:gpt-4o', 'ollama:llama3:latest'],
+    question: 'Why is the sky blue?',
+    turn: { role: 'assistant', text: '## Agreement\nBoth say scattering.', ms: 3200 },
+  };
+
+  it('is kept with its comparison, and read back as it was', () => {
+    saveComparison(comparison({ verdict }));
+    assert.deepEqual(getComparison(comparison().id).verdict, verdict);
+  });
+
+  it('is null for a comparison saved without one, or saved again without it', () => {
+    saveComparison(comparison());
+    assert.equal(getComparison(comparison().id).verdict, null);
+    saveComparison(comparison({ verdict }));
+    saveComparison(comparison());
+    assert.equal(getComparison(comparison().id).verdict, null);
+  });
+
+  it('is refused when it is malformed, rather than stored to fail when opened', () => {
+    const bad = [
+      'a verdict',
+      { ...verdict, judge: '' },
+      { ...verdict, labels: ['openai:gpt-4o'] },
+      { ...verdict, labels: ['openai:gpt-4o', 42] },
+      { ...verdict, question: undefined },
+      { ...verdict, turn: { role: 'judge', text: 'x' } },
+      { ...verdict, turn: undefined },
+    ];
+    for (const input of bad) assert.throws(() => saveComparison(comparison({ verdict: input })), InvalidInput);
+  });
+
+  it('can be kept in a history file from before verdicts, whose comparisons still open', () => {
+    const file = join(tmpdir(), `multi-llm-history-v1-${process.pid}.db`);
+    rmSync(file, { force: true });
+    // A file as version 1 left it: no verdict column.
+    const old = new DatabaseSync(file);
+    old.exec(`
+      CREATE TABLE comparisons (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, system TEXT NOT NULL, models TEXT NOT NULL,
+        transcripts TEXT NOT NULL, questions INTEGER NOT NULL, search_text TEXT NOT NULL,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE prompts (id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, text TEXT NOT NULL, created_at INTEGER NOT NULL);
+      PRAGMA user_version = 1;
+    `);
+    const { id, title, system, models, transcripts } = comparison();
+    old.prepare('INSERT INTO comparisons VALUES (?, ?, ?, ?, ?, 1, ?, 1, 1)')
+      .run(id, title, system, JSON.stringify(models), JSON.stringify(transcripts), title);
+    old.close();
+
+    process.env.HISTORY_DB = file;
+    try {
+      assert.equal(getComparison(id).verdict, null);
+      assert.deepEqual(getComparison(id).transcripts, transcripts);
+      saveComparison(comparison({ verdict }));
+      assert.deepEqual(getComparison(id).verdict, verdict);
+    } finally {
+      closeDatabase();
+      process.env.HISTORY_DB = ':memory:';
+      rmSync(file, { force: true });
+    }
   });
 });
 

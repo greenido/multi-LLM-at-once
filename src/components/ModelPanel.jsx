@@ -14,7 +14,7 @@ const TIMING_HELP =
  * The live timer ticks ten times a second. On its own that would re-render the
  * whole panel — and re-parse every answer in it — so it renders itself.
  */
-function ElapsedTime({ startedAt, label }) {
+export function ElapsedTime({ startedAt, label }) {
   const elapsed = useElapsed(startedAt);
   return (
     <>
@@ -53,9 +53,10 @@ function Thinking({ turn }) {
 /**
  * One turn. Memoized on the turn object, which is the whole point: a streaming
  * answer replaces only the last turn, so everything above it keeps its identity
- * and react-markdown does not re-parse an answer that has not changed.
+ * and react-markdown does not re-parse an answer that has not changed. The
+ * verdict renders its answer with it too, so it reads like any other.
  */
-const Turn = memo(function Turn({ turn }) {
+export const Turn = memo(function Turn({ turn }) {
   const { duration, load, firstToken, speed, tokens } = turnStats(turn);
   const timing = [duration, load, firstToken, speed].filter(Boolean).join(' · ');
 
