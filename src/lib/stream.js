@@ -12,9 +12,13 @@ const USAGE_EXTRAS = ['reasoningTokens', 'loadMs', 'evalMs', 'costUsd'];
  * piece of the reasoning ahead of it, and onUsage with the token counts the
  * provider reported. `think` asks models that can reason to show it.
  *
- * Throws on a non-2xx response, on an in-band {"type":"error"} event, and
- * rethrows the AbortError when `signal` is aborted so the caller can tell a
- * cancellation apart from a failure.
+ * Resolves with how the answer ended: `truncated` says why, for one that ended
+ * before it was finished — 'length' for the token limit.
+ *
+ * Throws on a non-2xx response, on an in-band {"type":"error"} event, on a
+ * stream that closes before its "done", and rethrows the AbortError when
+ * `signal` is aborted so the caller can tell a cancellation apart from a
+ * failure.
  */
 export async function streamQuery({ model, messages, system, think = false, signal, onChunk, onReasoning, onUsage }) {
   const response = await fetch('/query', {
@@ -35,6 +39,9 @@ export async function streamQuery({ model, messages, system, think = false, sign
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  // Set by the "done" frame. A stream that closes without one was cut off on
+  // the way, and what arrived must not pass for a finished answer.
+  let ending = null;
 
   const handleLine = (line) => {
     const trimmed = line.trim();
@@ -62,6 +69,9 @@ export async function streamQuery({ model, messages, system, think = false, sign
       onUsage?.(usage);
     }
     if (event.type === 'error') throw new Error(event.error);
+    if (event.type === 'done') {
+      ending = typeof event.truncated === 'string' ? { truncated: event.truncated } : {};
+    }
   };
 
   try {
@@ -82,4 +92,7 @@ export async function streamQuery({ model, messages, system, think = false, sign
   } finally {
     reader.cancel().catch(() => {});
   }
+
+  if (!ending) throw new Error('The connection closed before the answer was finished.');
+  return ending;
 }

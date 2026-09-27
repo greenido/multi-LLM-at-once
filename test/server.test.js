@@ -27,20 +27,35 @@ const KEY = 'sk-test-000000000000000000000000004f2a';
 let server;
 
 /**
- * A stand-in for OpenRouter, so a query can be followed all the way through:
- * one model, listed as taking the reasoning request, which reasons and then
- * answers. It keeps the last request body it was sent.
+ * A stand-in for OpenRouter, so a query can be followed all the way through.
+ * One model is listed as taking the reasoning request, and reasons and then
+ * answers. The rest end badly, each its own way: one writes slowly, one goes
+ * quiet partway, one never starts, and one runs into its token limit. It keeps
+ * the last request body it was sent.
  */
 let stub;
 let received = null;
 
+// The server's QUERY_TIMEOUT_MS: well above the slow writer's pauses, and well
+// below the time its whole answer takes.
+const TIMEOUT_MS = 600;
+
+const listed = (id, extra = {}) => ({ id, architecture: { output_modalities: ['text'] }, ...extra });
+
 function startStub() {
   const sse = (...values) => values.map((value) => `data: ${JSON.stringify(value)}\n\n`).join('');
+  const says = (content) => sse({ choices: [{ delta: { content } }] });
   stub = createServer((req, res) => {
     if (req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({
-        data: [{ id: 'deepseek/deepseek-r1', architecture: { output_modalities: ['text'] }, supported_parameters: ['reasoning'] }],
+        data: [
+          listed('deepseek/deepseek-r1', { supported_parameters: ['reasoning'] }),
+          listed('test/slow-writer'),
+          listed('test/goes-quiet'),
+          listed('test/never-starts'),
+          listed('test/cut-off'),
+        ],
       }));
     }
     let raw = '';
@@ -48,11 +63,38 @@ function startStub() {
     req.on('end', () => {
       received = JSON.parse(raw);
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-      res.end(`${sse(
-        { choices: [{ delta: { reasoning_details: [{ type: 'reasoning.text', text: 'First, add.' }] } }] },
-        { choices: [{ delta: { content: 'Four.' } }] },
-        { choices: [], usage: { prompt_tokens: 9, completion_tokens: 20 } },
-      )}data: [DONE]\n\n`);
+
+      switch (received.model) {
+        // Longer in all than the timeout, but never quiet for that long.
+        case 'test/slow-writer': {
+          let written = 0;
+          const timer = setInterval(() => {
+            res.write(says(`w${++written} `));
+            if (written === 8) {
+              clearInterval(timer);
+              res.end(`${sse({ choices: [{ delta: {}, finish_reason: 'stop' }] })}data: [DONE]\n\n`);
+            }
+          }, TIMEOUT_MS / 4);
+          res.on('close', () => clearInterval(timer));
+          return;
+        }
+        // One word, then nothing, with the connection left open.
+        case 'test/goes-quiet':
+          return res.write(says('Once '));
+        // The headers, and then nothing at all.
+        case 'test/never-starts':
+          return res.flushHeaders();
+        case 'test/cut-off':
+          return res.end(
+            `${says('The answer is cut off mid-sen')}${sse({ choices: [{ delta: {}, finish_reason: 'length' }] })}data: [DONE]\n\n`,
+          );
+        default:
+          return res.end(`${sse(
+            { choices: [{ delta: { reasoning_details: [{ type: 'reasoning.text', text: 'First, add.' }] } }] },
+            { choices: [{ delta: { content: 'Four.' } }] },
+            { choices: [], usage: { prompt_tokens: 9, completion_tokens: 20 } },
+          )}data: [DONE]\n\n`);
+      }
     });
   });
   return new Promise((resolve) => stub.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${stub.address().port}`)));
@@ -71,6 +113,7 @@ before(async () => {
       HOST: '127.0.0.1',
       ALLOWED_HOSTS: 'llm.test',
       OLLAMA_URL: 'http://127.0.0.1:1',
+      QUERY_TIMEOUT_MS: String(TIMEOUT_MS),
       NODE_ENV: 'test',
       // Cloud providers must be unconfigured at the start of the run.
       OPENAI_API_KEY: '',
@@ -110,6 +153,9 @@ const post = (body) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+
+/** A streamed answer's events, in order. */
+const lines = async (res) => (await res.text()).trim().split('\n').map((line) => JSON.parse(line));
 
 const putKey = (provider, apiKey) =>
   fetch(`${BASE}/api/settings/${provider}`, {
@@ -546,7 +592,6 @@ describe('cross-site requests', () => {
  */
 describe('a model that reasons', () => {
   const R1 = 'openrouter:deepseek/deepseek-r1';
-  const lines = async (res) => (await res.text()).trim().split('\n').map((line) => JSON.parse(line));
 
   before(() => putKey('openrouter', KEY));
   after(() => fetch(`${BASE}/api/settings/openrouter`, { method: 'DELETE' }));
@@ -566,5 +611,42 @@ describe('a model that reasons', () => {
     assert.equal('reasoning' in received, false);
     await lines(await post({ model: R1, messages: ask, think: true }));
     assert.deepEqual(received.reasoning, { enabled: true });
+  });
+});
+
+/**
+ * An answer that ends before it is finished has to say so: from here on it
+ * would otherwise read as a whole answer, and pass for one in the comparison.
+ */
+describe('an answer that ends early', () => {
+  before(() => putKey('openrouter', KEY));
+  after(() => fetch(`${BASE}/api/settings/openrouter`, { method: 'DELETE' }));
+
+  it('lets a slow model finish: the timeout measures silence, not the whole answer', async () => {
+    const events = await lines(await post({ model: 'openrouter:test/slow-writer', messages: ask }));
+    assert.equal(events.filter((event) => event.type === 'chunk').length, 8);
+    assert.deepEqual(events.at(-1), { type: 'done' });
+  });
+
+  it('reports a model that goes quiet partway as an error, after what it wrote', async () => {
+    const events = await lines(await post({ model: 'openrouter:test/goes-quiet', messages: ask }));
+    assert.deepEqual(events[0], { type: 'chunk', text: 'Once ' });
+    assert.equal(events.at(-1).type, 'error');
+    assert.match(events.at(-1).error, /Timed out: nothing arrived from the model for 0\.6s/);
+    assert.equal(events.some((event) => event.type === 'done'), false);
+  });
+
+  it('answers a model that never starts with a 504, not an empty 200', async () => {
+    const res = await post({ model: 'openrouter:test/never-starts', messages: ask });
+    assert.equal(res.status, 504);
+    assert.match((await res.json()).error, /Timed out/);
+  });
+
+  it('says so when the answer ran into the token limit', async () => {
+    const events = await lines(await post({ model: 'openrouter:test/cut-off', messages: ask }));
+    assert.deepEqual(events, [
+      { type: 'chunk', text: 'The answer is cut off mid-sen' },
+      { type: 'done', truncated: 'length' },
+    ]);
   });
 });

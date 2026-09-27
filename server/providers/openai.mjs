@@ -16,8 +16,16 @@ import {
   parseEvent,
   sortModels,
   sseEvents,
+  stoppedEarly,
   thinkTags,
 } from './shared.mjs';
+
+/**
+ * Why an answer ended, as the chat completions API says it. "length" is the
+ * token limit, and Mistral says "model_length" when it is the context window
+ * instead. A tool call is a normal end, though nothing here offers tools.
+ */
+const FINISH = { normal: ['stop', 'tool_calls', 'function_call'], limit: ['length', 'model_length'] };
 
 /**
  * OpenAI's GET /models returns the whole catalogue — embeddings, image, audio
@@ -181,6 +189,8 @@ export function openAiCompatible({
       let usage = null;
       // Qwen on Groq, among others, writes its reasoning into the answer.
       const split = thinkTags();
+      // Why the answer ended, from the frame that says so.
+      let finish = null;
 
       for await (const payload of sseEvents(response.body)) {
         if (payload === '[DONE]') break;
@@ -191,9 +201,11 @@ export function openAiCompatible({
         // An error can also arrive mid-stream, after a 200.
         if (event.error) throw new Error(event.error.message ?? `${label} failed mid-stream.`);
 
-        const { text, reasoning: thought } = readDelta(event.choices?.[0]?.delta ?? {});
+        const choice = event.choices?.[0];
+        const { text, reasoning: thought } = readDelta(choice?.delta ?? {});
         if (thought) yield { reasoning: thought };
         if (text) yield* split(text);
+        if (choice?.finish_reason) finish = choice.finish_reason;
 
         const reported = event.usage ?? event.x_groq?.usage;
         if (reported) usage = readUsage(reported);
@@ -201,6 +213,8 @@ export function openAiCompatible({
 
       yield* split();
       if (usage) yield { usage };
+      const truncated = stoppedEarly(finish, FINISH);
+      if (truncated) yield { truncated };
     },
   };
 }

@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
   HISTORY_TURNS,
   buildMarkdown,
+  cutShortNote,
   exportFilename,
   modelToMarkdown,
   toMessages,
@@ -130,6 +131,14 @@ describe('the markdown export', () => {
     assert.ok(text.includes('> ⚠️ Connection reset.'));
   });
 
+  it('marks an answer that was cut short, and says why', () => {
+    const text = modelToMarkdown(gpt, [
+      turn('user', 'q'),
+      turn('assistant', 'The answer is cut off mid-sen', { truncated: 'length' }),
+    ]);
+    assert.ok(text.includes('The answer is cut off mid-sen\n\n> ⚠️ Cut off at the token limit.'));
+  });
+
   it('sets the reasoning apart above the answer, and says how long it took', () => {
     const text = modelToMarkdown(gpt, [
       turn('user', 'Why is the sky blue?'),
@@ -159,6 +168,17 @@ describe('the markdown export', () => {
   it('has every model, in panel order', () => {
     const text = buildMarkdown([gpt, llama], {}, '', now);
     assert.ok(text.indexOf('## 🧠 gpt-4o') < text.indexOf('## 🐑 llama3'));
+  });
+});
+
+describe('cutShortNote', () => {
+  it('names the token limit', () => {
+    assert.equal(cutShortNote('length'), 'Cut off at the token limit.');
+  });
+
+  it("gives any other reason in the provider's own words", () => {
+    assert.equal(cutShortNote('content_filter'), 'Cut off by the provider (content filter).');
+    assert.equal(cutShortNote('safety'), 'Cut off by the provider (safety).');
   });
 });
 

@@ -7,7 +7,8 @@
  *   event: message_start        → input token count
  *   event: content_block_delta  → {"delta":{"type":"thinking_delta","thinking":"…"}}
  *   event: content_block_delta  → {"delta":{"type":"text_delta","text":"Hi"}}
- *   event: message_delta        → output token count, and how much was thinking
+ *   event: message_delta        → output token count, how much was thinking,
+ *                                 and why the answer ended
  */
 import {
   describeNetworkError,
@@ -15,6 +16,7 @@ import {
   parseEvent,
   sortModels,
   sseEvents,
+  stoppedEarly,
 } from './shared.mjs';
 
 const LABEL = 'Anthropic';
@@ -27,6 +29,16 @@ const MAX_TOKENS = Number(process.env.ANTHROPIC_MAX_TOKENS ?? 4096);
 // Thinking counts against max_tokens, so a model that may think gets this much
 // room on top of the answer's. An older model is also given it as its budget.
 const THINKING_TOKENS = 16_000;
+
+/**
+ * Why an answer ended. max_tokens is the cap above, and
+ * model_context_window_exceeded the model's own window; a refusal is a model
+ * declining to go on, which is an early end of another kind.
+ */
+const STOP = {
+  normal: ['end_turn', 'stop_sequence', 'tool_use', 'pause_turn'],
+  limit: ['max_tokens', 'model_context_window_exceeded'],
+};
 
 /**
  * What asks a model to think and show it. Claude 4.6 and later decide for
@@ -112,6 +124,7 @@ export const anthropic = {
     let promptTokens = 0;
     let completionTokens = 0;
     let reasoningTokens = 0;
+    let stopReason = null;
 
     for await (const payload of sseEvents(response.body)) {
       const event = parseEvent(payload);
@@ -136,6 +149,7 @@ export const anthropic = {
           // Thinking is billed as output, and counted in it.
           completionTokens = event.usage?.output_tokens ?? completionTokens;
           reasoningTokens = event.usage?.output_tokens_details?.thinking_tokens ?? reasoningTokens;
+          stopReason = event.delta?.stop_reason ?? stopReason;
           break;
 
         case 'error':
@@ -148,5 +162,7 @@ export const anthropic = {
         usage: { promptTokens, completionTokens, ...(reasoningTokens > 0 ? { reasoningTokens } : {}) },
       };
     }
+    const truncated = stoppedEarly(stopReason, STOP);
+    if (truncated) yield { truncated };
   },
 };
