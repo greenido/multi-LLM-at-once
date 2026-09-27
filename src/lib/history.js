@@ -33,17 +33,20 @@ export function comparisonTitle(models, transcripts) {
 }
 
 /**
- * What gets saved: every model with something in its transcript, minus the
- * flag that only means something while an answer is streaming. Null while
- * nothing has been asked, which is not worth saving.
+ * What gets saved: every model with something in its transcript, and the
+ * verdict when there is one, minus the flag that only means something while
+ * an answer is streaming. Null while nothing has been asked, which is not
+ * worth saving.
  */
-export function toSaved({ id, system, models, transcripts }) {
+export function toSaved({ id, system, models, transcripts, verdict = null }) {
   const kept = {};
   for (const [model, turns] of Object.entries(transcripts)) {
     if (turns.length > 0) kept[model] = turns.map(({ streaming, ...turn }) => turn);
   }
   const title = comparisonTitle(models, kept);
-  return title ? { id, title, system, models, transcripts: kept } : null;
+  if (!title) return null;
+  const { streaming, ...turn } = verdict?.turn ?? {};
+  return { id, title, system, models, transcripts: kept, ...(verdict ? { verdict: { ...verdict, turn } } : {}) };
 }
 
 /** Local midnight, so "yesterday" means the calendar day, across DST too. */

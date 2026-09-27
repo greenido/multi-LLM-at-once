@@ -2,7 +2,8 @@
  * Saved comparisons and saved prompts, kept in SQLite on the server.
  *
  * A comparison is one conversation across several models: the system prompt,
- * the panels in order, and every model's transcript. The browser still owns a
+ * the panels in order, every model's transcript, and — when one was asked for —
+ * a verdict, one model's comparison of the latest answers. The browser still owns a
  * live conversation and sends it whole — this is where a copy of it goes each
  * time an exchange finishes, so it can be found and picked up again later.
  * Transcripts are stored as the browser sent them, checked for shape rather
@@ -89,6 +90,13 @@ function connect() {
     db.exec('PRAGMA user_version = 1');
   }
 
+  // Version 2 keeps a verdict with a comparison. A file from before it gains
+  // the column, empty, and every comparison in it still opens.
+  if (db.prepare('PRAGMA user_version').get().user_version === 1) {
+    db.exec('ALTER TABLE comparisons ADD COLUMN verdict TEXT');
+    db.exec('PRAGMA user_version = 2');
+  }
+
   // Readable only by the user running the server — conversations can be as
   // private as keys. Best effort, as for the key store.
   if (path !== ':memory:') {
@@ -129,7 +137,7 @@ const toSummary = (row) => ({
  * comparison always opens. Beyond role and text a turn is passed through as
  * sent — its timings, token counts, notes — since the browser owns that shape.
  */
-function checkComparison({ id, title, system, models, transcripts }) {
+function checkComparison({ id, title, system, models, transcripts, verdict }) {
   check(isValidId(id), 'A comparison id is 8 to 64 letters, digits, - or _.');
   check(typeof title === 'string' && title.trim() && title.length <= 200, 'A title of up to 200 characters is required.');
   check(typeof system === 'string', 'system must be a string.');
@@ -149,21 +157,45 @@ function checkComparison({ id, title, system, models, transcripts }) {
     );
   }
   check(countQuestions(transcripts) > 0, 'A comparison needs at least one question.');
+  checkVerdict(verdict);
+}
+
+/**
+ * A verdict is optional. One that is there names the model that gave it and
+ * the models whose answers it read, in the order of their letters, and has
+ * its answer, shaped like any other turn.
+ */
+function checkVerdict(verdict) {
+  if (verdict === undefined || verdict === null) return;
+  check(isPlainObject(verdict), 'verdict must be an object when given.');
+  check(typeof verdict.judge === 'string' && verdict.judge, 'A verdict names the model that gave it.');
+  check(typeof verdict.question === 'string', 'A verdict keeps the question it was about.');
+  check(
+    Array.isArray(verdict.labels)
+      && verdict.labels.length >= 2
+      && verdict.labels.length <= 26
+      && verdict.labels.every((model) => typeof model === 'string' && model),
+    'A verdict lists the models whose answers it read.',
+  );
+  check(
+    isPlainObject(verdict.turn) && ROLES.has(verdict.turn.role) && typeof verdict.turn.text === 'string',
+    'A verdict needs its answer, with a role and text.',
+  );
 }
 
 /** Insert or replace one comparison. Created-at survives a replace. */
 export function saveComparison(comparison) {
   checkComparison(comparison);
-  const { id, system, models, transcripts } = comparison;
+  const { id, system, models, transcripts, verdict } = comparison;
   const title = comparison.title.trim();
   const now = Date.now();
   connect()
     .prepare(
-      `INSERT INTO comparisons (id, title, system, models, transcripts, questions, search_text, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO comparisons (id, title, system, models, transcripts, verdict, questions, search_text, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          title = excluded.title, system = excluded.system, models = excluded.models,
-         transcripts = excluded.transcripts, questions = excluded.questions,
+         transcripts = excluded.transcripts, verdict = excluded.verdict, questions = excluded.questions,
          search_text = excluded.search_text, updated_at = excluded.updated_at`,
     )
     .run(
@@ -172,6 +204,7 @@ export function saveComparison(comparison) {
       system,
       JSON.stringify(models),
       JSON.stringify(transcripts),
+      verdict ? JSON.stringify(verdict) : null,
       countQuestions(transcripts),
       searchText(title, transcripts),
       now,
@@ -211,6 +244,7 @@ export function getComparison(id) {
     ...toSummary(row),
     system: row.system,
     transcripts: JSON.parse(row.transcripts),
+    verdict: row.verdict ? JSON.parse(row.verdict) : null,
   };
 }
 

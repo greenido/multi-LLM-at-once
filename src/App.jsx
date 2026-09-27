@@ -6,6 +6,7 @@ import ModelPanel from './components/ModelPanel.jsx';
 import ModelPicker from './components/ModelPicker.jsx';
 import QueryBar from './components/QueryBar.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
+import VerdictPanel from './components/VerdictPanel.jsx';
 import {
   createPrompt,
   deleteComparison,
@@ -23,10 +24,16 @@ import { load, save } from './lib/storage.js';
 import { withCost } from './lib/metrics.js';
 import { streamQuery } from './lib/stream.js';
 import { buildMarkdown, downloadText, exportFilename, toMessages } from './lib/transcript.js';
+import { JUDGE_SYSTEM, buildJudgePrompt, latestExchange, verdictToMarkdown, withVerdict } from './lib/verdict.js';
 
 const SELECTION_KEY = 'multi-llm.selected-models';
 const SYSTEM_KEY = 'multi-llm.system-prompt';
 const THINK_KEY = 'multi-llm.think';
+const JUDGE_KEY = 'multi-llm.judge';
+
+// The verdict's request, beside the panels' — which are keyed by model id, and
+// a model id always has a colon in it.
+const VERDICT = 'verdict';
 
 // Tokens can arrive faster than it is worth re-rendering for, so chunks are
 // coalesced into at most one state update per this many milliseconds.
@@ -40,6 +47,9 @@ const NO_TURNS = [];
 const SEARCH_DELAY_MS = 200;
 
 // Static strings so Tailwind keeps these classes; four models read best as 2x2.
+/** What a saved comparison is checked against, to tell whether it changed. */
+const savedState = (snapshot) => JSON.stringify([snapshot?.transcripts ?? null, snapshot?.verdict ?? null]);
+
 const GRID_COLUMNS = {
   1: 'grid-cols-1',
   2: 'md:grid-cols-2',
@@ -64,7 +74,13 @@ export default function App() {
   const [query, setQuery] = useState('');
   const [transcripts, setTranscripts] = useState({});
   // modelId -> timestamp the in-flight request started, or undefined when idle.
+  // The verdict's request is in here too, under VERDICT.
   const [startedAt, setStartedAt] = useState({});
+  // One model's comparison of the latest answers: { judge, labels, question,
+  // turn }, where labels are the models whose answers it read, in letter order.
+  const [verdict, setVerdict] = useState(null);
+  // The model that judges, as the user last picked it.
+  const [judgeId, setJudgeId] = useState(() => load(JUDGE_KEY, null));
 
   // modelId -> AbortController for the in-flight request.
   const controllers = useRef(new Map());
@@ -99,7 +115,11 @@ export default function App() {
     [selectedIds, available],
   );
   const groups = useMemo(() => groupByProvider(available, providers), [available, providers]);
-  const anyRunning = selected.some((model) => startedAt[model.id]);
+  const anyRunning = selected.some((model) => startedAt[model.id]) || Boolean(startedAt[VERDICT]);
+  // The answers a verdict would compare, and the model that would judge them:
+  // the one last picked, while it is still available, or else the first panel's.
+  const exchange = useMemo(() => latestExchange(selected, transcripts), [selected, transcripts]);
+  const judge = available.find((model) => model.id === judgeId) ?? selected[0] ?? null;
   // Anything in flight at all, a panel since deselected included.
   const busy = Object.values(startedAt).some(Boolean);
 
@@ -189,9 +209,9 @@ export default function App() {
   // are saved along with it, but changing them is not a reason to save.
   useEffect(() => {
     if (busy) return;
-    const snapshot = toSaved({ id: comparisonId, system, models: selectedIds, transcripts });
+    const snapshot = toSaved({ id: comparisonId, system, models: selectedIds, transcripts, verdict });
     if (!snapshot) return;
-    const saved = JSON.stringify(snapshot.transcripts);
+    const saved = savedState(snapshot);
     if (saved === lastSaved.current) return;
     lastSaved.current = saved;
 
@@ -206,7 +226,7 @@ export default function App() {
         lastSaved.current = null;
         setNotice({ saveFailed: true, text: `Could not save this comparison: ${error.message}` });
       });
-  }, [busy, transcripts, comparisonId]);
+  }, [busy, transcripts, verdict, comparisonId]);
 
   // The list is read when the sheet opens and as the search changes, and
   // again after a save lands while it is open.
@@ -230,9 +250,10 @@ export default function App() {
 
     stop();
     conversation.current += 1;
-    lastSaved.current = JSON.stringify(toSaved(comparison)?.transcripts ?? null);
+    lastSaved.current = savedState(toSaved(comparison));
     setComparisonId(comparison.id);
     setTranscripts(comparison.transcripts);
+    setVerdict(comparison.verdict ?? null);
     updateSystem(comparison.system);
 
     // Its panels come back where their models still exist. The rest keep their
@@ -328,7 +349,13 @@ export default function App() {
     lastSaved.current = null;
     setComparisonId(newId());
     setTranscripts({});
+    setVerdict(null);
     setNotice(null);
+  }
+
+  function updateJudge(id) {
+    setJudgeId(id);
+    save(JUDGE_KEY, id);
   }
 
   //
@@ -348,22 +375,39 @@ export default function App() {
     applyProvider(await clearKey(provider));
   }
 
-  async function ask(model, messages) {
+  /** Ask one model, streaming its answer into the newest turn of its panel. */
+  function ask(model, messages) {
+    return streamTurn({
+      key: model.id,
+      model,
+      messages,
+      system,
+      begin: (turn) => appendTurn(model.id, turn),
+      update: (patchTurn) => patchLastTurn(model.id, patchTurn),
+    });
+  }
+
+  /**
+   * Stream one answer into a turn: a panel's newest, or the verdict's. `key`
+   * names the request, for Stop and the spinner; `begin` puts the empty turn
+   * where it will grow, and `update` patches it.
+   */
+  async function streamTurn({ key, model, messages, system, begin, update }) {
     const begunAt = Date.now();
     const controller = new AbortController();
-    controllers.current.set(model.id, controller);
-    setStartedAt((prev) => ({ ...prev, [model.id]: begunAt }));
+    controllers.current.set(key, controller);
+    setStartedAt((prev) => ({ ...prev, [key]: begunAt }));
 
     // Writes go to this conversation only. After New chat, or opening a saved
     // one, the panels hold something else, and a request still settling from
     // before would otherwise append "[stopped]" to the wrong answer.
     const generation = conversation.current;
-    const patch = (update) => {
-      if (conversation.current === generation) patchLastTurn(model.id, update);
+    const patch = (patchTurn) => {
+      if (conversation.current === generation) update(patchTurn);
     };
 
     // The turn the tokens stream into.
-    appendTurn(model.id, { role: 'assistant', text: '', streaming: true });
+    begin({ role: 'assistant', text: '', streaming: true });
 
     let pending = '';
     let pendingReasoning = '';
@@ -453,15 +497,44 @@ export default function App() {
     } finally {
       // In finally, so a throw anywhere above still clears the spinner — but
       // only this request's: the same model may already be answering again.
-      if (controllers.current.get(model.id) === controller) controllers.current.delete(model.id);
-      setStartedAt((prev) => (prev[model.id] === begunAt ? { ...prev, [model.id]: undefined } : prev));
+      if (controllers.current.get(key) === controller) controllers.current.delete(key);
+      setStartedAt((prev) => (prev[key] === begunAt ? { ...prev, [key]: undefined } : prev));
     }
+  }
+
+  /**
+   * Ask the judging model to compare the latest answers. They go to it by
+   * letter, never by model, and the letters are kept with what it says.
+   */
+  function compare() {
+    if (!exchange || !judge || anyRunning) return;
+    const labels = exchange.answers.map((answer) => answer.model.id);
+    streamTurn({
+      key: VERDICT,
+      model: judge,
+      messages: [{ role: 'user', content: buildJudgePrompt(exchange) }],
+      system: JUDGE_SYSTEM,
+      begin: (turn) => setVerdict({ judge: judge.id, labels, question: exchange.question, turn }),
+      update: (patchTurn) =>
+        setVerdict((current) => current && { ...current, turn: { ...current.turn, ...patchTurn(current.turn) } }),
+    });
+  }
+
+  /**
+   * A verdict is about the answers it read, so it goes when one of them is
+   * asked again or a new question is sent — stopped first, if it is still
+   * being written.
+   */
+  function dropVerdict() {
+    controllers.current.get(VERDICT)?.abort();
+    setVerdict(null);
   }
 
   async function send() {
     const text = query.trim();
     if (!text || selected.length === 0) return;
     setQuery('');
+    dropVerdict();
 
     // Snapshot each panel's history before the new turn is appended, so the
     // request carries the conversation up to this question. Every model keeps
@@ -492,6 +565,7 @@ export default function App() {
 
     const kept = turns.slice(0, question + 1);
     setTranscripts((prev) => ({ ...prev, [model.id]: kept }));
+    dropVerdict();
     ask(model, toMessages(kept));
   }
 
@@ -518,8 +592,8 @@ export default function App() {
     <div className="flex h-full flex-col">
       <Navbar
         onOpenHistory={() => setHistoryOpen(true)}
-        onExport={() => downloadText(exportFilename(), buildMarkdown(selected, transcripts, system))}
-        onCopyAll={() => copy(buildMarkdown(selected, transcripts, system))}
+        onExport={() => downloadText(exportFilename(), withVerdict(buildMarkdown(selected, transcripts, system), verdict))}
+        onCopyAll={() => copy(withVerdict(buildMarkdown(selected, transcripts, system), verdict))}
         onOpenSettings={() => {
           loadSettings();
           setSettingsOpen(true);
@@ -607,6 +681,20 @@ export default function App() {
               />
             ))}
           </div>
+        )}
+
+        {available.length > 0 && (
+          <VerdictPanel
+            verdict={verdict}
+            canCompare={Boolean(exchange && judge) && !anyRunning}
+            startedAt={startedAt[VERDICT]}
+            groups={groups}
+            judgeId={judge?.id}
+            onJudgeChange={updateJudge}
+            onCompare={compare}
+            onCopy={() => verdict && copy(verdictToMarkdown(verdict))}
+            onRemove={dropVerdict}
+          />
         )}
 
         <QueryBar
