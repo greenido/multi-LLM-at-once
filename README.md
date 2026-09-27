@@ -72,6 +72,16 @@ https://greenido.wordpress.com/2024/04/08/the-power-of-many-why-you-should-consi
   one next to a model that was allowed to finish. A model that goes quiet is
   given up on, and says so; a slow one still writing is left to finish, since
   the timeout measures silence rather than the whole answer.
+- **A verdict.** Once two or more panels have answered, **Compare answers**
+  sends the question and every answer to a model you pick, which says where
+  they agree, where they contradict each other and what each gets wrong,
+  names the best, and writes one merged answer. It reads them by letter — A,
+  B, C — never by model, since a model asked to judge tends to prefer its own
+  writing; a key above the verdict says which letter was which. An answer that
+  was cut short, or failed partway, is flagged to it as unfinished, so it is
+  not judged wrong where it stops. The verdict is saved with the comparison
+  and ends the export. It is about the answers it read, so a new question, or
+  a panel asked again, clears it.
 - **Multi-line prompts.** Paste code or a long question as it is: Enter sends,
   Shift+Enter starts a new line. The box grows with what you type.
 - **A real conversation per model.** Follow-up questions work, and each model
@@ -195,6 +205,10 @@ only when something changed — opening one to read it does not move it to the
 top. An exchange still streaming when you start a new chat or open another
 comparison is abandoned rather than saved, as **New chat** always did.
 
+A verdict is saved with its comparison. A `history.db` from before verdicts
+gains a column for them the first time the server opens it, and everything in
+it still opens.
+
 ## Tests
 
 ```bash
@@ -202,7 +216,8 @@ npm test
 ```
 
 Unit tests cover the transcript and history logic, the Markdown export, the
-timing and speed metrics, the model registry, the streaming NDJSON parser, the
+timing and speed metrics, the verdict's prompt — which answers it compares,
+and that no model's name reaches the judge — the model registry, the streaming NDJSON parser, the
 SSE reader, the key store, the history store, the storage wrapper, the
 stick-to-bottom rule the panels scroll by and the Enter-to-send rule the prompt
 box follows.
@@ -274,10 +289,11 @@ index.html            Vite entry
 src/App.jsx           state: models, selection, transcripts, in-flight requests
 src/components/       Navbar, ContextBar, ModelPicker, ModelPanel, QueryBar,
                       GrowingTextarea, HistoryPanel, PromptMenu, DeleteButton,
-                      SettingsModal, Markdown
+                      SettingsModal, Markdown, VerdictPanel
 src/lib/              models (catalogue), settings (keys), history (saved
                       comparisons and prompts), transcript (what is sent back,
-                      export), metrics (timings, speed), stream (NDJSON), api,
+                      export), verdict (comparing the answers), metrics
+                      (timings, speed), stream (NDJSON), api,
                       duration, storage, scroll (stick-to-bottom), keyboard
 server.mjs            Express API and routing
 server/keystore.mjs   API keys in SQLite, masked on the way out
@@ -383,8 +399,15 @@ returns a key.
 
 History is `GET /api/comparisons` (newest first; `?q=` searches questions and
 answers), and `GET`/`PUT`/`DELETE /api/comparisons/:id`. A comparison is
-`{ title, system, models, transcripts }`, where `transcripts` maps each model id
-to its turns; the server checks their shape and stores them as sent. Saved
+`{ title, system, models, transcripts, verdict }`, where `transcripts` maps
+each model id to its turns, and `verdict`, when there is one, is
+`{ judge, labels, question, turn }` — the model that judged, the models whose
+answers it read in the order of their letters, the question, and its answer
+as a turn. The server checks their shape and stores them as sent.
+
+A verdict needs no route of its own: it is one more `POST /query`, to the
+judging model, with the comparison as a single question and a system prompt of
+its own in place of the user's. Saved
 prompts are `GET /api/prompts`, `POST /api/prompts` with `{ kind, name, text }`
 — `kind` is `system` or `question` — and `DELETE /api/prompts/:id`.
 
