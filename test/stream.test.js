@@ -144,7 +144,7 @@ describe('streamQuery', () => {
 
   it('reads a final frame with no trailing newline', async () => {
     const { chunks } = await collect(() =>
-      streamed([`${JSON.stringify({ type: 'chunk', text: 'no newline' })}`]),
+      streamed([`${frames({ type: 'chunk', text: 'no newline' })}${JSON.stringify({ type: 'done' })}`]),
     );
     assert.deepEqual(chunks, ['no newline']);
   });
@@ -194,6 +194,40 @@ describe('streamQuery', () => {
       /daemon died/,
     );
     assert.deepEqual(chunks, ['partial']);
+  });
+
+  it('resolves with nothing to report for an answer that finished', async () => {
+    stubFetch(() => streamed([frames({ type: 'chunk', text: 'hi' }, { type: 'done' })]));
+    const ending = await streamQuery({ model: 'm', messages: [{ role: 'user', content: 'x' }], onChunk: () => {} });
+    assert.deepEqual(ending, {});
+  });
+
+  it('says why, for an answer that ended before it was finished', async () => {
+    stubFetch(() =>
+      streamed([frames({ type: 'chunk', text: 'cut mid-sen' }, { type: 'done', truncated: 'length' })]),
+    );
+    const ending = await streamQuery({ model: 'm', messages: [{ role: 'user', content: 'x' }], onChunk: () => {} });
+    assert.deepEqual(ending, { truncated: 'length' });
+  });
+
+  it('throws when the stream closes before "done", keeping the chunks that arrived', async () => {
+    // What a server that gives up without saying so looks like from here: a
+    // stream that simply stops. It must not pass for a finished answer.
+    const chunks = [];
+    stubFetch(() => streamed([frames({ type: 'chunk', text: 'w1 ' }, { type: 'chunk', text: 'w2' })]));
+    await assert.rejects(
+      streamQuery({ model: 'm', messages: [{ role: 'user', content: 'x' }], onChunk: (t) => chunks.push(t) }),
+      /closed before the answer was finished/,
+    );
+    assert.deepEqual(chunks, ['w1 ', 'w2']);
+  });
+
+  it('throws on an empty 200, rather than resolving as an empty answer', async () => {
+    stubFetch(() => streamed([]));
+    await assert.rejects(
+      streamQuery({ model: 'm', messages: [{ role: 'user', content: 'x' }], onChunk: () => {} }),
+      /closed before the answer was finished/,
+    );
   });
 
   it('skips an unparseable frame rather than aborting the stream', async () => {

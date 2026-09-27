@@ -1,9 +1,10 @@
 /**
  * Transcript helpers. A transcript is an ordered list of
  * { role: 'user' | 'assistant' | 'error', text: string } turns, where an
- * answer also carries any reasoning that came ahead of it, and whatever was
- * measured about it — see metrics.js. Reasoning is for reading: it is never
- * sent back to a model.
+ * answer also carries any reasoning that came ahead of it, whatever was
+ * measured about it — see metrics.js — and, for one that ended before it was
+ * finished, why: `truncated`. Reasoning is for reading: it is never sent back
+ * to a model.
  */
 import { formatSpend, turnStats } from './metrics.js';
 
@@ -58,6 +59,17 @@ export function totalTokens(turns) {
   );
 }
 
+/**
+ * What to say under an answer that ended before it was finished: 'length' is
+ * the token limit, and anything else the provider's own reason — a content
+ * filter, a refusal.
+ */
+export function cutShortNote(reason) {
+  return reason === 'length'
+    ? 'Cut off at the token limit.'
+    : `Cut off by the provider (${reason.replaceAll('_', ' ')}).`;
+}
+
 //
 // Export. Answers are markdown already, so the export is a markdown document
 // — and it carries what the panels show about each answer, because the
@@ -80,8 +92,9 @@ function turnToMarkdown(turn) {
   const label = ['**AI**', ...stats, ...(turn.streaming ? ['still answering'] : [])].join(' · ');
   // The reasoning ahead of the answer, set apart the way the panel sets it apart.
   const reasoning = turn.reasoning?.trim() ? `\n\n${quote(`**Thinking**\n\n${turn.reasoning.trim()}`)}` : '';
+  const cutShort = turn.truncated ? `\n\n${quote(`⚠️ ${cutShortNote(turn.truncated)}`)}` : '';
   const note = turn.note ? `\n\n${quote(`⚠️ ${turn.note}`)}` : '';
-  return `${label}${reasoning}\n\n${turn.text.trim()}${note}`;
+  return `${label}${reasoning}\n\n${turn.text.trim()}${cutShort}${note}`;
 }
 
 /** One model's conversation, titled with the model that had it. */

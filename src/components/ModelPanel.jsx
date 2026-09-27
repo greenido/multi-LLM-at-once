@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef } from 'react';
 import Markdown from './Markdown.jsx';
-import { modelToMarkdown, totalTokens } from '../lib/transcript.js';
+import { cutShortNote, modelToMarkdown, totalTokens } from '../lib/transcript.js';
 import { formatDuration, useElapsed } from '../lib/duration.js';
 import { formatSpend, turnStats } from '../lib/metrics.js';
 import { isAtBottom } from '../lib/scroll.js';
@@ -95,6 +95,7 @@ const Turn = memo(function Turn({ turn }) {
         </p>
       )}
 
+      {turn.truncated && <p className="mt-1 text-xs text-amber-700">{cutShortNote(turn.truncated)}</p>}
       {turn.note && <p className="mt-1 text-xs text-red-600">{turn.note}</p>}
     </li>
   );

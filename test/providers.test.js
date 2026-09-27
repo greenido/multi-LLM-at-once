@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { after, before, describe, it } from 'node:test';
+import { after, afterEach, before, describe, it } from 'node:test';
 
 import { anthropic } from '../server/providers/anthropic.mjs';
 import { gemini } from '../server/providers/gemini.mjs';
@@ -22,6 +22,11 @@ const KEY = 'sk-test-000000000000000000000000004f2a';
 let seen = null;
 /** How many times Ollama was asked what a model can do. */
 let shows = 0;
+/**
+ * Why the stub says an answer ended, in the dialect's own words, when a test
+ * wants something other than a normal finish.
+ */
+let stopReason = null;
 let server;
 
 const sse = (lines) => lines.map((line) => `${line}\n\n`).join('');
@@ -43,11 +48,13 @@ before(async () => {
     const path = `/${rest.join('/')}`;
     // openai-401 and openai-stall are the same dialect on a route that
     // misbehaves, so a test can point a base URL at one; openai-reasoning
-    // answers as a reasoning model would, and ollama-tags as one that writes
-    // its reasoning into the answer between <think> tags.
-    const dialect = segment.replace(/-(401|stall|reasoning|tags)$/, '');
+    // answers as a reasoning model would, ollama-tags as one that writes its
+    // reasoning into the answer between <think> tags, and gemini-blocked as a
+    // model refusing the prompt outright.
+    const dialect = segment.replace(/-(401|stall|reasoning|tags|blocked)$/, '');
     const reasoning = segment.endsWith('-reasoning');
     const tags = segment.endsWith('-tags');
+    const blocked = segment.endsWith('-blocked');
 
     if (segment.endsWith('-401')) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -163,6 +170,7 @@ before(async () => {
         line({
           message: { role: 'assistant', content: '' },
           done: true,
+          done_reason: stopReason ?? 'stop',
           prompt_eval_count: 111,
           eval_count: 222,
           load_duration: 2_100_000_000,
@@ -198,8 +206,15 @@ before(async () => {
         event('content_block_stop', { index: 0 }),
         event('content_block_delta', { index: 1, delta: { type: 'text_delta', text: 'Hello ' } }),
         event('content_block_delta', { index: 1, delta: { type: 'text_delta', text: 'there' } }),
-        event('message_delta', { usage }),
+        event('message_delta', { delta: { stop_reason: stopReason ?? 'end_turn' }, usage }),
         event('message_stop', {}),
+      ]));
+    }
+
+    // A prompt refused outright gets no candidates, only the reason.
+    if (dialect === 'gemini' && blocked) {
+      return res.end(sse([
+        `data: ${JSON.stringify({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' }, usageMetadata: { promptTokenCount: 111 } })}`,
       ]));
     }
 
@@ -211,7 +226,7 @@ before(async () => {
         // Asked for, a thinking model's thoughts come first, marked as such.
         ...(reasoning ? [`data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: 'First, add.', thought: true }] } }] })}`] : []),
         `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: 'Hello ' }, { text: 'there' }] } }] })}`,
-        `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: '' }] } }], usageMetadata })}`,
+        `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ text: '' }] }, finishReason: stopReason ?? 'STOP' }], usageMetadata })}`,
       ]));
     }
 
@@ -225,7 +240,7 @@ before(async () => {
       return res.end(sse([
         ...lead.map((delta) => `data: ${JSON.stringify({ choices: [{ delta }] })}`),
         `data: ${JSON.stringify({ choices: [{ delta: { content: 'Hello ' } }] })}`,
-        `data: ${JSON.stringify({ choices: [{ delta: { content: 'there' } }], x_groq: { usage: { prompt_tokens: 111, completion_tokens: 222, completion_time: 0.5 } } })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'there' }, finish_reason: stopReason ?? 'stop' }], x_groq: { usage: { prompt_tokens: 111, completion_tokens: 222, completion_time: 0.5 } } })}`,
         'data: [DONE]',
       ]));
     }
@@ -260,6 +275,7 @@ before(async () => {
 
     return res.end(sse([
       ...deltas.map((delta) => `data: ${JSON.stringify({ choices: [{ delta }] })}`),
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: stopReason ?? 'stop' }] })}`,
       `data: ${JSON.stringify({ choices: [], usage })}`,
       'data: [DONE]',
     ]));
@@ -280,11 +296,12 @@ before(async () => {
 
 after(() => server?.close());
 
-/** Drain an adapter's stream into the text, reasoning and usage it produced. */
+/** Drain an adapter's stream into the text, reasoning and usage it produced, and why it ended early. */
 async function drain(provider, options = {}) {
   let text = '';
   let reasoning = '';
   let usage = null;
+  let truncated = null;
   for await (const part of provider.chat({
     key: KEY,
     model: 'test-model',
@@ -299,8 +316,9 @@ async function drain(provider, options = {}) {
     if (part.text) text += part.text;
     if (part.reasoning) reasoning += part.reasoning;
     if (part.usage) usage = part.usage;
+    if (part.truncated) truncated = part.truncated;
   }
-  return { text, reasoning, usage };
+  return { text, reasoning, usage, truncated };
 }
 
 /** Point a provider's base URL at one of the stub's variants while `run` runs. */
@@ -566,6 +584,56 @@ describe('asking a model to think', () => {
       await drain(provider, { think: true, thinking: true });
       assert.equal('reasoning' in seen.body, false, provider.label);
     }
+  });
+});
+
+/**
+ * An answer that ran into the token limit looks, word for word, like one that
+ * finished — only the provider's stop reason tells them apart, and each
+ * provider has its own words for it.
+ */
+describe('saying when an answer was cut short', () => {
+  afterEach(() => {
+    stopReason = null;
+  });
+
+  it('a finished answer is not marked', async () => {
+    for (const provider of [openai, xai, groq, mistral, deepseek, openrouter, anthropic, gemini, ollama]) {
+      assert.equal((await drain(provider)).truncated, null, provider.label);
+    }
+  });
+
+  for (const [name, provider, reason] of [
+    ['OpenAI says "length"', openai, 'length'],
+    ['OpenRouter, like everyone who speaks the API, says "length"', openrouter, 'length'],
+    ['Groq says it on the frame that carries its counts', groq, 'length'],
+    ['Mistral says "model_length" when it is the context window', mistral, 'model_length'],
+    ['Anthropic says "max_tokens"', anthropic, 'max_tokens'],
+    ['Anthropic says "model_context_window_exceeded" when it is the window', anthropic, 'model_context_window_exceeded'],
+    ['Gemini says "MAX_TOKENS"', gemini, 'MAX_TOKENS'],
+    ['Ollama says "length"', ollama, 'length'],
+  ]) {
+    it(`${name}, which comes out as the token limit`, async () => {
+      stopReason = reason;
+      const { text, truncated } = await drain(provider);
+      assert.equal(text, 'Hello there');
+      assert.equal(truncated, 'length');
+    });
+  }
+
+  it("any other early end comes out in the provider's own words", async () => {
+    stopReason = 'content_filter';
+    assert.equal((await drain(openai)).truncated, 'content_filter');
+    stopReason = 'SAFETY';
+    assert.equal((await drain(gemini)).truncated, 'safety');
+    stopReason = 'refusal';
+    assert.equal((await drain(anthropic)).truncated, 'refusal');
+  });
+
+  it('Gemini says why when it refuses the prompt outright, with no answer at all', async () => {
+    const { text, truncated } = await onVariant('GEMINI_BASE_URL', 'blocked', () => drain(gemini));
+    assert.equal(text, '');
+    assert.equal(truncated, 'prohibited_content');
   });
 });
 

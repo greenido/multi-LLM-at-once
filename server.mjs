@@ -46,6 +46,8 @@ const port = process.env.PORT ?? 3000;
 // 0.0.0.0 (behind TLS, and something that authenticates) when you mean it.
 const host = process.env.HOST ?? '127.0.0.1';
 const isProduction = process.env.NODE_ENV === 'production';
+// How long a model may send nothing before it is given up on. Silence, not the
+// whole answer: a slow model still writing a long one is left to finish.
 const queryTimeoutMs = Number(process.env.QUERY_TIMEOUT_MS ?? 120_000);
 
 //
@@ -335,6 +337,11 @@ app.delete('/api/prompts/:id', (req, res) => {
 //   {"type":"usage","promptTokens":9,"completionTokens":4}  at most one
 //   {"type":"done"}                 or {"type":"error","error":"..."}
 //
+// "done" means the model stopped, not that it finished: one that ran into its
+// token limit, or that the provider stopped early, says why in it —
+// {"type":"done","truncated":"length"}. A stream always ends with one of the
+// two, so a stream that simply stops was cut off on the way.
+//
 // `think: true` asks a model that can reason to do it and show it. Models that
 // reason unasked send their reasoning either way.
 //
@@ -384,22 +391,33 @@ app.post('/query', async (req, res) => {
     `☀️ ${model}: ${messages.length} message(s), system ${system?.trim() ? 'set' : 'unset'}${think ? ', thinking' : ''}`,
   );
 
-  // The browser going away, and a model that never finishes, both need to stop
+  // The browser going away, and a model that has gone quiet, both need to stop
   // the work rather than leave it running against the provider — a cloud call
-  // left running is also a call still being billed.
+  // left running is also a call still being billed. Only a timeout is worth
+  // reporting: after a disconnect there is nobody left to tell.
   const controller = new AbortController();
-  let cancelled = false;
+  // Why the work was stopped, once it has been: 'disconnected' or 'timeout'.
+  let cancelled = null;
   const cancel = (reason) => {
     if (cancelled) return;
-    cancelled = true;
-    console.log(`✋ ${model}: ${reason}`);
+    cancelled = reason;
+    console.log(`✋ ${model}: ${reason === 'timeout' ? `nothing for ${queryTimeoutMs}ms, gave up` : 'client disconnected'}`);
     controller.abort();
   };
 
   res.on('close', () => {
-    if (!res.writableEnded) cancel('client disconnected');
+    if (!res.writableEnded) cancel('disconnected');
   });
-  const timeout = setTimeout(() => cancel(`timed out after ${queryTimeoutMs}ms`), queryTimeoutMs);
+
+  // Restarted by everything the model sends, so it measures silence rather
+  // than the length of the answer.
+  let timeout;
+  const restartClock = () => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => cancel('timeout'), queryTimeoutMs);
+  };
+  restartClock();
+  const timedOut = `Timed out: nothing arrived from the model for ${queryTimeoutMs / 1000}s (QUERY_TIMEOUT_MS).`;
 
   // Pull the first item before writing headers, so a refused key, an unreachable
   // provider or a missing model is still reported as a normal JSON error with a
@@ -424,7 +442,9 @@ app.post('/query', async (req, res) => {
     first = await stream.next();
   } catch (error) {
     clearTimeout(timeout);
-    if (cancelled) return res.end();
+    if (cancelled === 'disconnected') return res.end();
+    // An empty 200 would read as a model with nothing to say.
+    if (cancelled === 'timeout') return res.status(504).json({ error: timedOut });
     console.error('🚨 Error:', error.message);
     return res.status(502).json({ error: error.message });
   }
@@ -441,10 +461,13 @@ app.post('/query', async (req, res) => {
   try {
     let characters = 0;
     let reasoned = 0;
+    // Why the answer ended early, when the provider said it did.
+    let cutOff = null;
     let item = first;
 
     while (!item.done) {
-      const { text, reasoning, usage } = item.value;
+      restartClock();
+      const { text, reasoning, usage, truncated } = item.value;
       if (reasoning) {
         reasoned += reasoning.length;
         send({ type: 'reasoning', text: reasoning });
@@ -454,14 +477,20 @@ app.post('/query', async (req, res) => {
         send({ type: 'chunk', text });
       }
       if (usage) send({ type: 'usage', ...usage });
+      if (truncated) cutOff = truncated;
       item = await stream.next();
     }
 
-    send({ type: 'done' });
-    console.log(`== ${model} streamed ${characters} chars${reasoned ? ` and ${reasoned} of reasoning` : ''}`);
+    send({ type: 'done', ...(cutOff ? { truncated: cutOff } : {}) });
+    console.log(
+      `== ${model} streamed ${characters} chars${reasoned ? ` and ${reasoned} of reasoning` : ''}${cutOff ? `, cut off (${cutOff})` : ''}`,
+    );
   } catch (error) {
-    // An abort is expected: either the user cancelled or we timed out.
-    if (!cancelled) {
+    // A stream that just stopped would pass for a finished answer, so a
+    // timeout is said in-band like any other failure. A disconnect is not.
+    if (cancelled === 'timeout') {
+      send({ type: 'error', error: timedOut });
+    } else if (!cancelled) {
       console.error('🚨 Error mid-stream:', error.message);
       send({ type: 'error', error: error.message });
     }

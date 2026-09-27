@@ -66,6 +66,12 @@ https://greenido.wordpress.com/2024/04/08/the-power-of-many-why-you-should-consi
 - **Retry one panel.** A model that hit a rate limit, timed out or was stopped
   can be asked its last question again on its own. The panels beside it are
   not re-asked, and not billed again.
+- **An answer cut short says so.** One that ran into its token limit, or that
+  the provider stopped early — a content filter, a refusal — is marked under
+  the answer, in History and in the export, rather than passing for a finished
+  one next to a model that was allowed to finish. A model that goes quiet is
+  given up on, and says so; a slow one still writing is left to finish, since
+  the timeout measures silence rather than the whole answer.
 - **Multi-line prompts.** Paste code or a long question as it is: Enter sends,
   Shift+Enter starts a new line. The box grows with what you type.
 - **A real conversation per model.** Follow-up questions work, and each model
@@ -208,7 +214,8 @@ and the history go where each API expects them. It also pins down how each
 provider reports a reasoning model's hidden tokens, which three of them do in
 three different ways; the five different places a model's reasoning can
 arrive, two of them inside the answer; which models the Thinking switch asks,
-and how; and each provider's departures from the API it copies.
+and how; how each says an answer ran into its token limit; and each
+provider's departures from the API it copies.
 `registry.test.js` checks that a published price reaches the catalogue and
 that a priced model can still be asked for. The
 server tests boot the real server and cover
@@ -216,7 +223,10 @@ request validation, the settings, history and prompt routes, the
 unreachable-provider paths, the cross-site requests that must not reach a
 provider, and requests addressed to a name that is not this machine. One
 follows the Thinking switch through a stand-in provider, from the request to
-the reasoning streamed back.
+the reasoning streamed back. Others give the stand-in a model that writes
+slowly, one that goes quiet partway, one that never starts and one that runs
+into its token limit, and check that each ends the way it should: the slow one
+finishing, and the rest saying why they did not.
 
 No test reaches a real provider, and none needs Ollama running.
 
@@ -249,12 +259,12 @@ All optional.
 | `ALLOWED_ORIGINS` | — | Comma-separated extra origins allowed to POST, for a UI served elsewhere. |
 | `ALLOWED_HOSTS` | — | Comma-separated extra host names to answer to while bound to loopback. |
 | `OLLAMA_URL` | `http://localhost:11434` | Where to reach Ollama. |
-| `QUERY_TIMEOUT_MS` | `120000` | Abort a model that never finishes. A model asked to think can take minutes over a hard question. |
+| `QUERY_TIMEOUT_MS` | `120000` | Give up on a model that has sent nothing for this long. It measures silence, not the whole answer, so a slow model still writing is left to finish. A model that reasons without showing it sends nothing until it answers, so one asked to think hard may need more. |
 | `NODE_ENV` | — | Set to `production` to serve `dist/`. |
 | `KEYS_DB` | `data/keys.db` | Where the API keys are stored. |
 | `HISTORY_DB` | `data/history.db` | Where saved comparisons and prompts are stored. |
 | `OPENAI_API_KEY` etc. | — | A key supplied by the environment instead of the modal. |
-| `ANTHROPIC_MAX_TOKENS` | `4096` | Anthropic requires a cap on every request; this is the answer's share. A Claude that may think gets 16,000 more, since thinking counts against the same cap. |
+| `ANTHROPIC_MAX_TOKENS` | `4096` | Anthropic requires a cap on every request; this is the answer's share, and an answer that reaches it says so. A Claude that may think gets 16,000 more, since thinking counts against the same cap. |
 | `OPENAI_BASE_URL` etc. | the provider | Point an adapter somewhere else — a proxy, or a stub. |
 
 ## How it is put together
@@ -323,6 +333,19 @@ newline-delimited JSON:
 {"type":"usage","promptTokens":9,"completionTokens":4}   at most one
 {"type":"done"}                  or {"type":"error","error":"..."}
 ```
+
+Every stream ends with one of the last two, so a stream that simply stops was
+cut off on the way, and the browser says so rather than showing what arrived
+as a whole answer. `done` means the model stopped, not that it finished: one
+that ran into its token limit sends `{"type":"done","truncated":"length"}`,
+and one the provider stopped for another reason sends that reason in the
+provider's own words — `content_filter`, `safety`, `refusal`. Each provider
+says it hit the limit in its own words, too — `finish_reason: "length"` in the
+chat completions API (and Mistral's `"model_length"` for its context window),
+Anthropic's `stop_reason: "max_tokens"`, Gemini's `finishReason: "MAX_TOKENS"`,
+Ollama's `done_reason: "length"` — and the adapters read them all. A model that
+sends nothing for `QUERY_TIMEOUT_MS` ends in an `error` event, or in a 504 if
+it never started.
 
 `think: true` is the Thinking switch. A model that reasons unasked sends
 `reasoning` events either way; the switch asks the rest, where the model's

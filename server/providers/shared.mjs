@@ -101,6 +101,26 @@ export function describeNetworkError(error, label) {
   return message;
 }
 
+/**
+ * Why an answer ended before it was finished, or null for one that finished.
+ *
+ * Every provider says why an answer ended, each in its own words. Running into
+ * the output token limit is the common case, and whatever a provider calls it
+ * comes back as 'length'. Any other reason that is not a normal finish — a
+ * content filter, a refusal — comes back as the provider's own word for it,
+ * lowercased. An answer cut short must not pass for a finished one: the model
+ * beside it may have been allowed to finish, and the comparison is only fair
+ * if that shows.
+ *
+ * @param reason the provider's stop reason, as it sent it
+ * @param normal the reasons that mean the model finished what it was saying
+ * @param limit  the reasons that mean it ran out of room
+ */
+export function stoppedEarly(reason, { normal, limit }) {
+  if (typeof reason !== 'string' || !reason || normal.includes(reason)) return null;
+  return limit.includes(reason) ? 'length' : reason.toLowerCase();
+}
+
 /** Trim a provider's model list to the ones a chat request can actually use. */
 export function sortModels(names) {
   return [...new Set(names)].filter(Boolean).sort((a, b) => a.localeCompare(b));

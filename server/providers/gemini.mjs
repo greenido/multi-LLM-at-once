@@ -15,12 +15,19 @@ import {
   parseEvent,
   sortModels,
   sseEvents,
+  stoppedEarly,
 } from './shared.mjs';
 
 const LABEL = 'Google Gemini';
 
 // Listed models that answer generateContent but are not chat models.
 const NOT_CHAT = /embedding|aqa|imagen|veo|tts|native-audio|live-/i;
+
+/**
+ * Why an answer ended. MAX_TOKENS is the token limit; anything but a plain
+ * STOP — SAFETY, RECITATION and the rest — ended it early for another reason.
+ */
+const FINISH = { normal: ['STOP', 'FINISH_REASON_UNSPECIFIED'], limit: ['MAX_TOKENS'] };
 
 const baseUrl = () =>
   (process.env.GEMINI_BASE_URL ?? 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, '');
@@ -88,6 +95,7 @@ export const gemini = {
     // thoughtsTokenCount, but billed as output all the same — so it is added
     // in, or Gemini would look cheaper than it is next to the others.
     let usage = null;
+    let finish = null;
 
     for await (const payload of sseEvents(response.body)) {
       const event = parseEvent(payload);
@@ -95,8 +103,13 @@ export const gemini = {
 
       if (event.error) throw new Error(event.error.message ?? `${LABEL} failed mid-stream.`);
 
+      const candidate = event.candidates?.[0];
+      if (candidate?.finishReason) finish = candidate.finishReason;
+      // A prompt refused outright gets no answer at all, only this.
+      if (event.promptFeedback?.blockReason) finish = event.promptFeedback.blockReason;
+
       // A candidate can be split across several parts within one frame.
-      const parts = event.candidates?.[0]?.content?.parts ?? [];
+      const parts = candidate?.content?.parts ?? [];
       const join = (thought) =>
         parts
           .filter((part) => Boolean(part.thought) === thought)
@@ -118,5 +131,7 @@ export const gemini = {
     }
 
     if (usage) yield { usage };
+    const truncated = stoppedEarly(finish, FINISH);
+    if (truncated) yield { truncated };
   },
 };

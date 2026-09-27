@@ -6,9 +6,12 @@
  * entirely — a user with only cloud keys never starts it.
  */
 import { Ollama } from 'ollama';
-import { thinkTags } from './shared.mjs';
+import { stoppedEarly, thinkTags } from './shared.mjs';
 
 const LABEL = 'Ollama';
+
+/** Why an answer ended: "length" is num_predict, or the context filling up. */
+const DONE = { normal: ['stop', 'load', 'unload'], limit: ['length'] };
 
 export const ollamaUrl = () => process.env.OLLAMA_URL ?? 'http://localhost:11434';
 
@@ -89,6 +92,8 @@ export const ollama = {
               ...nanosToMs('evalMs', part.eval_duration),
             },
           };
+          const truncated = stoppedEarly(part.done_reason, DONE);
+          if (truncated) yield { truncated };
         }
       }
     } catch (error) {

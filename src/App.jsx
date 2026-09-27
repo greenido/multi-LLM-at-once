@@ -402,7 +402,7 @@ export default function App() {
     };
 
     try {
-      await streamQuery({
+      const { truncated } = await streamQuery({
         model: model.id,
         messages,
         system,
@@ -431,7 +431,7 @@ export default function App() {
         onUsage: (usage) => patch(() => ({ usage: withCost(usage, model.pricing) })),
       });
       flush();
-      patch(() => ({ streaming: false, ...timings() }));
+      patch(() => ({ streaming: false, ...timings(), ...(truncated ? { truncated } : {}) }));
     } catch (error) {
       flush();
       const cancelled = error.name === 'AbortError';
