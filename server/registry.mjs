@@ -47,8 +47,16 @@ const toEntry = (model) => (typeof model === 'string' ? { name: model } : model)
 // Ollama is cached briefly so a freshly pulled model turns up quickly; the
 // cloud catalogues change far more slowly and their calls are metered.
 //
+// A listing that failed is kept only briefly: holding a network blip for five
+// minutes would refuse every model missing from the fallback list long after
+// the provider came back.
+//
 const TTL_MS = { ollama: 10_000 };
 const DEFAULT_TTL_MS = 5 * 60_000;
+export const ERROR_TTL_MS = 15_000;
+
+// provider id -> { at, result } once a listing is in, or { pending } while it
+// is being fetched — so four panels asking at once share one request.
 const cache = new Map();
 
 /** Called when a key changes — the old answer for that provider is now wrong. */
@@ -56,30 +64,46 @@ export function invalidate(providerId) {
   cache.delete(providerId);
 }
 
-async function listProvider(provider) {
-  const cached = cache.get(provider.id);
+function isFresh({ at, result }, provider) {
   const ttl = TTL_MS[provider.id] ?? DEFAULT_TTL_MS;
-  if (cached && Date.now() - cached.at < ttl) return cached.result;
+  return Date.now() - at < (result.error ? Math.min(ttl, ERROR_TTL_MS) : ttl);
+}
 
+async function fetchListing(provider) {
   const key = provider.keyless ? null : getKey(provider.id);
-  let result;
 
-  if (!provider.keyless && !key) {
-    // Not an error — just nothing to show until a key is set.
-    result = { models: [], error: null, configured: false };
-  } else {
-    try {
-      result = { models: (await provider.listModels(key)).map(toEntry), error: null, configured: true };
-    } catch (error) {
-      // A failed listing should not empty the picker. The curated fallback keeps
-      // the provider usable, and the error rides along so the UI can say why the
-      // list may be incomplete.
-      result = { models: provider.fallbackModels.map(toEntry), error: error.message, configured: true };
-    }
+  // Not an error — just nothing to show until a key is set.
+  if (!provider.keyless && !key) return { models: [], error: null, configured: false };
+
+  try {
+    return { models: (await provider.listModels(key)).map(toEntry), error: null, configured: true };
+  } catch (error) {
+    // A failed listing should not empty the picker. The curated fallback keeps
+    // the provider usable, and the error rides along so the UI can say why the
+    // list may be incomplete.
+    return { models: provider.fallbackModels.map(toEntry), error: error.message, configured: true };
   }
+}
 
-  cache.set(provider.id, { at: Date.now(), result });
-  return result;
+function listProvider(provider) {
+  const cached = cache.get(provider.id);
+  if (cached?.pending) return cached.pending;
+  if (cached && isFresh(cached, provider)) return Promise.resolve(cached.result);
+
+  const pending = fetchListing(provider).then(
+    (result) => {
+      // Only if nothing replaced it meanwhile: a key saved mid-flight
+      // invalidates this answer, and it must not land on top of the new one.
+      if (cache.get(provider.id)?.pending === pending) cache.set(provider.id, { at: Date.now(), result });
+      return result;
+    },
+    (error) => {
+      if (cache.get(provider.id)?.pending === pending) cache.delete(provider.id);
+      throw error;
+    },
+  );
+  cache.set(provider.id, { pending });
+  return pending;
 }
 
 /**
