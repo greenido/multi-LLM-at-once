@@ -38,8 +38,11 @@ https://greenido.wordpress.com/2024/04/08/the-power-of-many-why-you-should-consi
   models bill by the token and local ones do not. Reasoning is counted too,
   since it is billed as output, and the count says how much of the output it
   was — `1,222 out (1,000 reasoning)` — even for a model that never shows its
-  reasoning. Where the provider publishes prices — OpenRouter — the answer's
-  cost is shown beside them.
+  reasoning. Beside them, what the answer cost: OpenRouter reports what it
+  billed, and for a model reached directly — OpenAI, Anthropic, Gemini, Grok,
+  Mistral, DeepSeek — it is worked out from the list price and marked as an
+  estimate, `~$0.0090`. Groq, which sets its own prices, and local models show
+  tokens only. See **Prices** below.
 - **Reasoning, shown deliberately.** A model that reasons out loud on its own
   — DeepSeek's reasoner, Qwen and GPT-OSS on Groq, a thinking model in Ollama
   — shows that reasoning above its answer rather than mixed into it, in a
@@ -89,6 +92,16 @@ https://greenido.wordpress.com/2024/04/08/the-power-of-many-why-you-should-consi
 - **A system prompt** applied to every model, so you compare them under the
   same instruction. It and your model selection are remembered across reloads;
   **New chat** clears every panel without touching either.
+- **A temperature and an answer cap per panel.** **Tune** on a panel sets its
+  temperature and the most tokens its answer may take — blank is the
+  provider's default, **Use defaults** clears both. They are remembered per
+  model, shown in the panel's header, and recorded on each answer, so History
+  and the export say what an answer was asked with. Claude takes a
+  temperature from 0 to 1, and is not sent one when asked to think, which its
+  API refuses; everyone else takes 0 to 2. The verdict's judge always runs at
+  its defaults.
+- **Dark mode.** **System** (the default, following the system as it
+  changes), **Light** or **Dark**, from the menu in the top bar.
 - **History.** Every comparison is saved as soon as its answers are in —
   question, answers, system prompt, panels and all. **History** lists them
   newest first and searches every question and answer. Open one and its panels
@@ -192,6 +205,21 @@ The others follow the same pattern: `OPENROUTER_API_KEY`, `GROQ_API_KEY`,
 A key stored through the modal takes precedence over the environment, so you can
 override a deployment default without restarting.
 
+## Prices
+
+OpenRouter's listing says what each model costs; the other providers' do not.
+So the server reads OpenRouter's public model catalogue — no key, and nothing
+about you or your questions is sent — once a day, and gives a model reached
+directly the list price filed there for it. OpenRouter charges what each lab
+charges, so it is the lab's own list price. The match is kept narrow: an
+exact id, an Anthropic snapshot to its family, Mistral's `-latest`; an OpenAI
+snapshot, which can be priced apart from its alias, only exactly. A model it
+cannot match shows tokens only.
+
+A cost worked out this way is the list price times the tokens. It knows
+nothing of caching or batch discounts, so it is shown as an estimate. Set
+`PRICES_URL=` (empty) to turn this off and make no request at all.
+
 ## History
 
 Comparisons and saved prompts are kept in `data/history.db`, a second SQLite
@@ -239,7 +267,8 @@ arrive, two of them inside the answer; which models the Thinking switch asks,
 and how; how each says an answer ran into its token limit; and each
 provider's departures from the API it copies.
 `registry.test.js` checks that a published price reaches the catalogue and
-that a priced model can still be asked for. The
+that a priced model can still be asked for, and `prices.test.js` how a model
+reached directly is matched to its list price — and when it is not. The
 server tests boot the real server and cover
 request validation, the settings, history and prompt routes, the
 unreachable-provider paths, the cross-site requests that must not reach a
@@ -256,7 +285,8 @@ They cover what `App.jsx` coordinates: every panel asked at once with only its
 own thread, one failing without holding up the rest, a comparison saved once
 its answers are in and not mid-stream, Stop keeping what streamed, Retry
 re-asking one panel, a saved comparison opened mid-stream without the old
-answer's late words landing in it, and the verdict reading answers by letter.
+answer's late words landing in it, the verdict reading answers by letter, a
+panel's settings going with that panel alone, and the theme.
 
 No test reaches a real provider, and none needs Ollama running.
 
@@ -299,6 +329,7 @@ All optional.
 | `OPENAI_API_KEY` etc. | — | A key supplied by the environment instead of the modal. |
 | `ANTHROPIC_MAX_TOKENS` | `4096` | Anthropic requires a cap on every request; this is the answer's share, and an answer that reaches it says so. A Claude that may think gets 16,000 more, since thinking counts against the same cap. |
 | `OPENAI_BASE_URL` etc. | the provider | Point an adapter somewhere else — a proxy, or a stub. |
+| `PRICES_URL` | OpenRouter's catalogue | Where list prices are read from, once a day. Empty turns it off. |
 
 ## How it is put together
 
@@ -364,10 +395,13 @@ hold for the full five minutes.
 `GET /api/models` returns `{ models, providers }` — every queryable model,
 and one entry per provider carrying its label, whether it is keyless, whether a
 key is configured, how many models it offered and any listing error. A model
-whose provider publishes prices carries `pricing`, in USD per token.
+whose provider publishes prices carries `pricing`, in USD per token — with
+`estimated: true` where it is a list price from the catalogue.
 
-`POST /query` takes `{ model, messages, system, think }` and replies with
-newline-delimited JSON:
+`POST /query` takes `{ model, messages, system, think, settings }` and replies
+with newline-delimited JSON. `settings`, optional, is a panel's `{ temperature,
+maxTokens }`: temperature from 0 to 2, and a whole number of tokens; either
+can be left out, and the provider's default stands.
 
 ```
 {"type":"reasoning","text":"..."}                      zero or more, ahead of the answer
@@ -448,9 +482,9 @@ prompts are `GET /api/prompts`, `POST /api/prompts` with `{ kind, name, text }`
 - [x] Save and reload past comparisons
 - [x] Show tokens/sec alongside the wall-clock timer
 - [x] Show a model's reasoning, and ask the ones that can to reason
-- [ ] Per-model settings: temperature and a cap on the answer's length
-- [ ] What an answer cost, for every provider with a published price
-- [ ] Dark mode
+- [x] Per-model settings: temperature and a cap on the answer's length
+- [x] What an answer cost, for every provider with a published price
+- [x] Dark mode
 - [ ] Pick a winner with the names hidden, and a leaderboard from those picks
 - [ ] Export and import history as JSON
 
