@@ -238,7 +238,7 @@ function ModelPanel({ model, turns, startedAt, settings, onCopy, onRetry, onSett
 
         {spent && (
           <span
-            title="Tokens used by this conversation, and their cost where the provider publishes prices"
+            title="Tokens used by this conversation, and what they cost: as billed where the provider reports it, or ~ an estimate from the list price"
             className="font-mono text-[11px] tabular-nums text-slate-400"
           >
             {formatSpend(total)}

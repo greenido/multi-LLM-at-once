@@ -224,7 +224,7 @@ export function openAiCompatible({
 }
 
 /** OpenRouter's prices are strings of USD per token; a negative one means it varies. */
-function readPricing(entry) {
+export function readPricing(entry) {
   const prompt = Number(entry.pricing?.prompt);
   const completion = Number(entry.pricing?.completion);
   return prompt >= 0 && completion >= 0 ? { prompt, completion } : null;

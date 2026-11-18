@@ -125,6 +125,8 @@ before(async () => {
       MISTRAL_API_KEY: '',
       DEEPSEEK_API_KEY: '',
       OPENROUTER_BASE_URL: openrouter,
+      // No price catalogue: nothing here reaches the network.
+      PRICES_URL: '',
     },
     stdio: 'ignore',
   });

@@ -112,6 +112,7 @@ describe('what an answer cost', () => {
 
   it('prefers the cost the provider reported, which knows about caching', () => {
     assert.equal(withCost(usage(200, { costUsd: 0.0001 }), pricing).costUsd, 0.0001);
+    assert.equal('costEstimated' in withCost(usage(200, { costUsd: 0.0001 }), pricing), false);
   });
 
   it('has no cost at all for a provider that publishes no prices', () => {
@@ -129,6 +130,12 @@ describe('what an answer cost', () => {
   it('rides along with the token counts', () => {
     assert.equal(formatSpend({ promptTokens: 9, completionTokens: 40, costUsd: 0.0012 }), '9 in · 40 out · $0.0012');
     assert.equal(formatSpend({ promptTokens: 9, completionTokens: 40 }), '9 in · 40 out');
+  });
+
+  it('marks a cost worked out from a list price as an estimate', () => {
+    const estimated = withCost(usage(200, { promptTokens: 1000 }), { prompt: 0.000003, completion: 0.000015 });
+    assert.equal(estimated.costEstimated, true);
+    assert.equal(formatSpend({ promptTokens: 9, completionTokens: 40, costUsd: 0.0012, costEstimated: true }), '9 in · 40 out · ~$0.0012');
   });
 
   it('turns a list price into free, or dollars per million tokens', () => {
