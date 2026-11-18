@@ -76,7 +76,7 @@ export function parseEvent(payload) {
  */
 export async function describeResponseError(response, label) {
   const body = await response.text().catch(() => '');
-  let message = '';
+  let message;
   try {
     message = JSON.parse(body)?.error?.message ?? '';
   } catch {

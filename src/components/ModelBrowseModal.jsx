@@ -30,9 +30,14 @@ export default function ModelBrowseModal({
   }, [open]);
 
   // Reset the search when a different provider (or a pre-filled query) opens.
-  useEffect(() => {
+  // Adjusted while rendering, rather than in an effect, so the dialog never
+  // paints once with the previous provider's search in it.
+  const opening = open ? `${group?.id}\u0000${initialFilter}` : null;
+  const [opened, setOpened] = useState(opening);
+  if (opening !== opened) {
+    setOpened(opening);
     if (open) setFilter(initialFilter);
-  }, [open, initialFilter, group?.id]);
+  }
 
   useEffect(() => {
     if (open) {

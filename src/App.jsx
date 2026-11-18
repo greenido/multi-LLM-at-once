@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Navbar from './components/Navbar.jsx';
 import ContextBar from './components/ContextBar.jsx';
 import HistoryPanel from './components/HistoryPanel.jsx';
@@ -7,49 +7,27 @@ import ModelPicker from './components/ModelPicker.jsx';
 import QueryBar from './components/QueryBar.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
 import VerdictPanel from './components/VerdictPanel.jsx';
-import {
-  createPrompt,
-  deleteComparison,
-  deletePrompt,
-  getComparison,
-  listComparisons,
-  listPrompts,
-  newId,
-  saveComparison,
-  toSaved,
-} from './lib/history.js';
-import { MAX_SELECTED, defaultSelection, fetchModels, groupByProvider } from './lib/models.js';
+import { useAutosave } from './hooks/useAutosave.js';
+import { useCatalogue } from './hooks/useCatalogue.js';
+import { useHistorySheet } from './hooks/useHistorySheet.js';
+import { usePersistentState } from './hooks/usePersistentState.js';
+import { usePrompts } from './hooks/usePrompts.js';
+import { useStreams } from './hooks/useStreams.js';
+import { useTranscripts } from './hooks/useTranscripts.js';
+import { deleteComparison, getComparison, newId } from './lib/history.js';
 import { clearKey, fetchSettings, saveKey, testKey } from './lib/settings.js';
-import { load, save } from './lib/storage.js';
-import { withCost } from './lib/metrics.js';
-import { streamQuery } from './lib/stream.js';
 import { buildMarkdown, downloadText, exportFilename, toMessages } from './lib/transcript.js';
 import { JUDGE_SYSTEM, buildJudgePrompt, latestExchange, verdictToMarkdown, withVerdict } from './lib/verdict.js';
-
-const SELECTION_KEY = 'multi-llm.selected-models';
-const SYSTEM_KEY = 'multi-llm.system-prompt';
-const THINK_KEY = 'multi-llm.think';
-const JUDGE_KEY = 'multi-llm.judge';
 
 // The verdict's request, beside the panels' — which are keyed by model id, and
 // a model id always has a colon in it.
 const VERDICT = 'verdict';
 
-// Tokens can arrive faster than it is worth re-rendering for, so chunks are
-// coalesced into at most one state update per this many milliseconds.
-const FLUSH_INTERVAL_MS = 60;
-
 // One shared empty array, so a panel with no transcript yet keeps a stable
 // prop and stays memoized like the rest.
 const NO_TURNS = [];
 
-// Searching history waits for a pause in typing rather than asking per key.
-const SEARCH_DELAY_MS = 200;
-
 // Static strings so Tailwind keeps these classes; four models read best as 2x2.
-/** What a saved comparison is checked against, to tell whether it changed. */
-const savedState = (snapshot) => JSON.stringify([snapshot?.transcripts ?? null, snapshot?.verdict ?? null]);
-
 const GRID_COLUMNS = {
   1: 'grid-cols-1',
   2: 'md:grid-cols-2',
@@ -57,107 +35,53 @@ const GRID_COLUMNS = {
   4: 'md:grid-cols-2',
 };
 
+const isBoolean = (value) => typeof value === 'boolean';
+const isString = (value) => typeof value === 'string';
+
 export default function App() {
-  const [available, setAvailable] = useState([]);
-  const [providers, setProviders] = useState([]);
-  const [registryError, setRegistryError] = useState(null);
-  const [loadingRegistry, setLoadingRegistry] = useState(true);
-  const [selectedIds, setSelectedIds] = useState([]);
+  const catalogue = useCatalogue();
+  const { available, providers, groups, selected, selectedIds } = catalogue;
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [keySettings, setKeySettings] = useState([]);
   const [dismissed, setDismissed] = useState([]);
 
-  const [system, setSystem] = useState(() => load(SYSTEM_KEY, ''));
+  const [system, setSystem] = usePersistentState('multi-llm.system-prompt', '', isString);
   // The Thinking switch: ask models that can reason to do it, and show it.
-  const [think, setThink] = useState(() => load(THINK_KEY, false) === true);
+  const [think, setThink] = usePersistentState('multi-llm.think', false, isBoolean);
+  // The model that judges, as the user last picked it.
+  const [judgeId, setJudgeId] = usePersistentState('multi-llm.judge', null);
   const [query, setQuery] = useState('');
-  const [transcripts, setTranscripts] = useState({});
-  // modelId -> timestamp the in-flight request started, or undefined when idle.
-  // The verdict's request is in here too, under VERDICT.
-  const [startedAt, setStartedAt] = useState({});
+
+  const { transcripts, setTranscripts, appendTurn, patchLastTurn } = useTranscripts();
   // One model's comparison of the latest answers: { judge, labels, question,
   // turn }, where labels are the models whose answers it read, in letter order.
   const [verdict, setVerdict] = useState(null);
-  // The model that judges, as the user last picked it.
-  const [judgeId, setJudgeId] = useState(() => load(JUDGE_KEY, null));
-
-  // modelId -> AbortController for the in-flight request.
-  const controllers = useRef(new Map());
+  const streams = useStreams();
+  const { startedAt, busy, streamTurn } = streams;
 
   // The conversation on screen is saved under this id, which a new chat or an
   // opened comparison replaces.
   const [comparisonId, setComparisonId] = useState(newId);
-  // Bumped whenever the panels start holding a different conversation. A
-  // request from the one before may still be settling, and must not write its
-  // last words into this one.
-  const conversation = useRef(0);
-  // The transcripts as last saved or opened, so an unchanged conversation is
-  // not saved again — opening one from history would otherwise bump it.
-  const lastSaved = useRef(null);
-  // Saves run one at a time, in order, so an older snapshot never lands last.
-  const saveQueue = useRef(Promise.resolve());
+  const autosave = useAutosave({ id: comparisonId, system, models: selectedIds, transcripts, verdict, busy });
+  const history = useHistorySheet({ savedAt: autosave.savedAt });
+  const { prompts, savePrompt, removePrompt } = usePrompts();
 
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [historyQuery, setHistoryQuery] = useState('');
-  const [historyItems, setHistoryItems] = useState([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyError, setHistoryError] = useState(null);
-  const [prompts, setPrompts] = useState([]);
-  // A one-off message above the panels: a save that failed, or models a
-  // reopened comparison had that are not available now.
+  // A one-off message above the panels: models a reopened comparison had that
+  // are not available now.
   const [notice, setNotice] = useState(null);
-  // When a save last landed, so an open history list can re-read itself.
-  const [savedAt, setSavedAt] = useState(0);
 
-  const selected = useMemo(
-    () => selectedIds.map((id) => available.find((model) => model.id === id)).filter(Boolean),
-    [selectedIds, available],
-  );
-  const groups = useMemo(() => groupByProvider(available, providers), [available, providers]);
   const anyRunning = selected.some((model) => startedAt[model.id]) || Boolean(startedAt[VERDICT]);
   // The answers a verdict would compare, and the model that would judge them:
   // the one last picked, while it is still available, or else the first panel's.
   const exchange = useMemo(() => latestExchange(selected, transcripts), [selected, transcripts]);
   const judge = available.find((model) => model.id === judgeId) ?? selected[0] ?? null;
-  // Anything in flight at all, a panel since deselected included.
-  const busy = Object.values(startedAt).some(Boolean);
 
   // A provider that failed and has nothing to offer would otherwise vanish from
   // the picker without saying why — the usual case being Ollama not running.
   const warnings = providers.filter(
     (provider) => provider.error && provider.count === 0 && !dismissed.includes(provider.id),
   );
-
-  /**
-   * `quiet` refreshes the list without blanking the panels, for when a key
-   * changed and the catalogue needs re-reading underneath a live conversation.
-   */
-  const loadRegistry = useCallback(async ({ quiet = false } = {}) => {
-    if (!quiet) setLoadingRegistry(true);
-    setRegistryError(null);
-    try {
-      const { models, providers: found } = await fetchModels();
-      setAvailable(models);
-      setProviders(found);
-
-      // Keep a remembered choice only for models that are still available.
-      setSelectedIds((current) => {
-        const remembered = current.length > 0 ? current : load(SELECTION_KEY, null);
-        const stillValid = Array.isArray(remembered)
-          ? remembered.filter((id) => models.some((model) => model.id === id))
-          : [];
-        return stillValid.length > 0 ? stillValid.slice(0, MAX_SELECTED) : defaultSelection(models);
-      });
-    } catch (error) {
-      setRegistryError(error.message);
-      setAvailable([]);
-      setProviders([]);
-      setSelectedIds([]);
-    } finally {
-      if (!quiet) setLoadingRegistry(false);
-    }
-  }, []);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -167,195 +91,59 @@ export default function App() {
     }
   }, []);
 
-  useEffect(() => {
-    loadRegistry();
-    loadSettings();
-  }, [loadRegistry, loadSettings]);
-
-  // Leaving the page should not leave requests running against a provider.
-  useEffect(() => () => {
-    controllers.current.forEach((controller) => controller.abort());
-    controllers.current.clear();
-  }, []);
-
-  useEffect(() => {
-    listPrompts()
-      .then(setPrompts)
-      .catch((error) => console.error('Could not read saved prompts:', error));
-  }, []);
-
   //
   // History.
   //
-  // Searches can overlap, and the answer to an older one must not land last.
-  const latestSearch = useRef(0);
-  const refreshHistory = useCallback(async (query) => {
-    const search = ++latestSearch.current;
-    setHistoryLoading(true);
-    try {
-      const items = await listComparisons(query);
-      if (search !== latestSearch.current) return;
-      setHistoryItems(items);
-      setHistoryError(null);
-    } catch (error) {
-      if (search === latestSearch.current) setHistoryError(error.message);
-    } finally {
-      if (search === latestSearch.current) setHistoryLoading(false);
-    }
-  }, []);
-
-  // The conversation is saved each time an exchange settles — never
-  // mid-stream — and only when it changed. The system prompt and the panels
-  // are saved along with it, but changing them is not a reason to save.
-  useEffect(() => {
-    if (busy) return;
-    const snapshot = toSaved({ id: comparisonId, system, models: selectedIds, transcripts, verdict });
-    if (!snapshot) return;
-    const saved = savedState(snapshot);
-    if (saved === lastSaved.current) return;
-    lastSaved.current = saved;
-
-    saveQueue.current = saveQueue.current
-      .then(() => saveComparison(snapshot))
-      .then(() => {
-        setSavedAt(Date.now());
-        setNotice((current) => (current?.saveFailed ? null : current));
-      })
-      .catch((error) => {
-        // Not marked saved, so the next exchange tries again with everything.
-        lastSaved.current = null;
-        setNotice({ saveFailed: true, text: `Could not save this comparison: ${error.message}` });
-      });
-  }, [busy, transcripts, verdict, comparisonId]);
-
-  // The list is read when the sheet opens and as the search changes, and
-  // again after a save lands while it is open.
-  useEffect(() => {
-    if (!historyOpen) return undefined;
-    // Loading from the start, so the sheet does not flash "nothing saved".
-    setHistoryLoading(true);
-    const timer = setTimeout(() => refreshHistory(historyQuery), historyQuery ? SEARCH_DELAY_MS : 0);
-    return () => clearTimeout(timer);
-  }, [historyOpen, historyQuery, refreshHistory, savedAt]);
-
   /** Put a saved comparison back in the panels, to read or to carry on. */
   async function openComparison(id) {
     let comparison;
     try {
       comparison = await getComparison(id);
     } catch (error) {
-      setHistoryError(error.message);
+      history.setError(error.message);
       return;
     }
 
-    stop();
-    conversation.current += 1;
-    lastSaved.current = savedState(toSaved(comparison));
+    streams.nextConversation();
+    autosave.markSaved(comparison);
     setComparisonId(comparison.id);
     setTranscripts(comparison.transcripts);
     setVerdict(comparison.verdict ?? null);
-    updateSystem(comparison.system);
+    setSystem(comparison.system);
 
     // Its panels come back where their models still exist. The rest keep their
     // answers, and show again if that model comes back.
     const reachable = comparison.models.filter((modelId) => available.some((model) => model.id === modelId));
-    if (reachable.length > 0) {
-      const next = reachable.slice(0, MAX_SELECTED);
-      setSelectedIds(next);
-      save(SELECTION_KEY, next);
-    }
+    if (reachable.length > 0) catalogue.select(reachable);
     const missing = comparison.models.filter((modelId) => !reachable.includes(modelId));
     setNotice(
       missing.length > 0
-        ? { text: `Not available right now: ${missing.join(', ')}. Their answers are kept, and show again when they are back.` }
+        ? `Not available right now: ${missing.join(', ')}. Their answers are kept, and show again when they are back.`
         : null,
     );
-    setHistoryOpen(false);
+    history.hide();
   }
 
   async function removeComparison(id) {
     try {
       await deleteComparison(id);
     } catch (error) {
-      setHistoryError(error.message);
+      history.setError(error.message);
       return;
     }
     // Deleting the one on screen clears it, or the next answer would save it
     // straight back.
     if (id === comparisonId) newChat();
-    setHistoryItems((items) => items.filter((item) => item.id !== id));
-  }
-
-  //
-  // Saved prompts.
-  //
-  async function savePrompt(kind, name, text) {
-    const prompt = await createPrompt({ kind, name, text });
-    // In the order the server lists them, so nothing moves on the next load.
-    setPrompts((current) =>
-      [...current, prompt].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })),
-    );
-  }
-
-  async function removePrompt(id) {
-    try {
-      await deletePrompt(id);
-      setPrompts((current) => current.filter((prompt) => prompt.id !== id));
-    } catch (error) {
-      console.error('Could not delete the prompt:', error);
-    }
-  }
-
-  function toggleModel(id) {
-    setSelectedIds((prev) => {
-      const next = prev.includes(id)
-        ? prev.filter((current) => current !== id)
-        : [...prev, id].slice(0, MAX_SELECTED);
-      save(SELECTION_KEY, next);
-      return next;
-    });
-  }
-
-  function appendTurn(modelId, turn) {
-    setTranscripts((prev) => ({ ...prev, [modelId]: [...(prev[modelId] ?? []), turn] }));
-  }
-
-  /** Patch the newest turn of a transcript, used to grow a streaming answer. */
-  function patchLastTurn(modelId, patch) {
-    setTranscripts((prev) => {
-      const turns = prev[modelId] ?? [];
-      if (turns.length === 0) return prev;
-      const last = turns[turns.length - 1];
-      return {
-        ...prev,
-        [modelId]: [...turns.slice(0, -1), { ...last, ...patch(last) }],
-      };
-    });
-  }
-
-  function updateSystem(next) {
-    setSystem(next);
-    save(SYSTEM_KEY, next);
-  }
-
-  function updateThink(next) {
-    setThink(next);
-    save(THINK_KEY, next);
+    history.forget(id);
   }
 
   function newChat() {
-    stop();
-    conversation.current += 1;
-    lastSaved.current = null;
+    streams.nextConversation();
+    autosave.markSaved(null);
     setComparisonId(newId());
     setTranscripts({});
     setVerdict(null);
     setNotice(null);
-  }
-
-  function updateJudge(id) {
-    setJudgeId(id);
-    save(JUDGE_KEY, id);
   }
 
   //
@@ -364,15 +152,7 @@ export default function App() {
   //
   function applyProvider(updated) {
     setKeySettings((prev) => prev.map((provider) => (provider.id === updated.id ? updated : provider)));
-    loadRegistry({ quiet: true });
-  }
-
-  async function handleSaveKey(provider, apiKey) {
-    applyProvider(await saveKey(provider, apiKey));
-  }
-
-  async function handleClearKey(provider) {
-    applyProvider(await clearKey(provider));
+    catalogue.reload({ quiet: true });
   }
 
   /** Ask one model, streaming its answer into the newest turn of its panel. */
@@ -382,124 +162,10 @@ export default function App() {
       model,
       messages,
       system,
+      think,
       begin: (turn) => appendTurn(model.id, turn),
       update: (patchTurn) => patchLastTurn(model.id, patchTurn),
     });
-  }
-
-  /**
-   * Stream one answer into a turn: a panel's newest, or the verdict's. `key`
-   * names the request, for Stop and the spinner; `begin` puts the empty turn
-   * where it will grow, and `update` patches it.
-   */
-  async function streamTurn({ key, model, messages, system, begin, update }) {
-    const begunAt = Date.now();
-    const controller = new AbortController();
-    controllers.current.set(key, controller);
-    setStartedAt((prev) => ({ ...prev, [key]: begunAt }));
-
-    // Writes go to this conversation only. After New chat, or opening a saved
-    // one, the panels hold something else, and a request still settling from
-    // before would otherwise append "[stopped]" to the wrong answer.
-    const generation = conversation.current;
-    const patch = (patchTurn) => {
-      if (conversation.current === generation) update(patchTurn);
-    };
-
-    // The turn the tokens stream into.
-    begin({ role: 'assistant', text: '', streaming: true });
-
-    let pending = '';
-    let pendingReasoning = '';
-    let lastFlush = 0;
-    // When the first token arrived — of reasoning or of the answer — which
-    // splits waiting for a model from watching it write. Kept even for an
-    // answer that fails or is stopped.
-    let firstTokenAt;
-    // Reasoning runs from its own first token to the answer's first, or to
-    // the end for a model stopped while it was still thinking.
-    let reasoningAt;
-    let answerAt;
-    const thinkingMs = () => (answerAt ?? Date.now()) - reasoningAt;
-    const timings = () => ({
-      ms: Date.now() - begunAt,
-      ...(firstTokenAt === undefined ? {} : { ttftMs: firstTokenAt - begunAt }),
-      ...(reasoningAt === undefined ? {} : { thinkingMs: thinkingMs() }),
-    });
-    const flush = () => {
-      if (!pending && !pendingReasoning) return;
-      const chunk = pending;
-      const thought = pendingReasoning;
-      pending = '';
-      pendingReasoning = '';
-      patch((last) => ({
-        text: last.text + chunk,
-        ...(thought ? { reasoning: (last.reasoning ?? '') + thought } : {}),
-      }));
-    };
-    const queue = () => {
-      const now = performance.now();
-      if (now - lastFlush >= FLUSH_INTERVAL_MS) {
-        lastFlush = now;
-        flush();
-      }
-    };
-
-    try {
-      const { truncated } = await streamQuery({
-        model: model.id,
-        messages,
-        system,
-        think,
-        signal: controller.signal,
-        onReasoning: (chunk) => {
-          firstTokenAt ??= Date.now();
-          reasoningAt ??= Date.now();
-          pendingReasoning += chunk;
-          queue();
-        },
-        onChunk: (chunk) => {
-          firstTokenAt ??= Date.now();
-          if (answerAt === undefined) {
-            answerAt = Date.now();
-            // The answer has started, so the thinking is over: the panel folds
-            // it away and says for how long.
-            if (reasoningAt !== undefined) {
-              flush();
-              patch(() => ({ thinkingMs: thinkingMs() }));
-            }
-          }
-          pending += chunk;
-          queue();
-        },
-        onUsage: (usage) => patch(() => ({ usage: withCost(usage, model.pricing) })),
-      });
-      flush();
-      patch(() => ({ streaming: false, ...timings(), ...(truncated ? { truncated } : {}) }));
-    } catch (error) {
-      flush();
-      const cancelled = error.name === 'AbortError';
-      patch((last) => {
-        // A cancelled answer keeps whatever streamed in, and so does one that
-        // failed partway — reasoning included. A failure with nothing at all
-        // to show becomes the error itself.
-        const streamed = Boolean(last.text || last.reasoning);
-        return {
-          streaming: false,
-          ...timings(),
-          role: cancelled || streamed ? last.role : 'error',
-          text: cancelled
-            ? `${last.text}${last.text ? '\n' : ''}[stopped]`
-            : streamed ? last.text : error.message,
-          note: !cancelled && streamed ? error.message : undefined,
-        };
-      });
-    } finally {
-      // In finally, so a throw anywhere above still clears the spinner — but
-      // only this request's: the same model may already be answering again.
-      if (controllers.current.get(key) === controller) controllers.current.delete(key);
-      setStartedAt((prev) => (prev[key] === begunAt ? { ...prev, [key]: undefined } : prev));
-    }
   }
 
   /**
@@ -514,6 +180,7 @@ export default function App() {
       model: judge,
       messages: [{ role: 'user', content: buildJudgePrompt(exchange) }],
       system: JUDGE_SYSTEM,
+      think,
       begin: (turn) => setVerdict({ judge: judge.id, labels, question: exchange.question, turn }),
       update: (patchTurn) =>
         setVerdict((current) => current && { ...current, turn: { ...current.turn, ...patchTurn(current.turn) } }),
@@ -526,7 +193,7 @@ export default function App() {
    * being written.
    */
   function dropVerdict() {
-    controllers.current.get(VERDICT)?.abort();
+    streams.abort(VERDICT);
     setVerdict(null);
   }
 
@@ -577,10 +244,6 @@ export default function App() {
   });
   const onRetry = useCallback((model) => latestRetry.current(model), []);
 
-  function stop() {
-    controllers.current.forEach((controller) => controller.abort());
-  }
-
   // Stable, so a panel streaming tokens does not re-render the ones beside it.
   const copy = useCallback((text) => {
     navigator.clipboard.writeText(text).catch((error) => {
@@ -588,12 +251,14 @@ export default function App() {
     });
   }, []);
 
+  const exportMarkdown = () => withVerdict(buildMarkdown(selected, transcripts, system), verdict);
+
   return (
     <div className="flex h-full flex-col">
       <Navbar
-        onOpenHistory={() => setHistoryOpen(true)}
-        onExport={() => downloadText(exportFilename(), withVerdict(buildMarkdown(selected, transcripts, system), verdict))}
-        onCopyAll={() => copy(withVerdict(buildMarkdown(selected, transcripts, system), verdict))}
+        onOpenHistory={history.show}
+        onExport={() => downloadText(exportFilename(), exportMarkdown())}
+        onCopyAll={() => copy(exportMarkdown())}
         onOpenSettings={() => {
           loadSettings();
           setSettingsOpen(true);
@@ -602,43 +267,21 @@ export default function App() {
 
       <main className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col gap-4 p-4">
         {warnings.map((provider) => (
-          <div
+          <Banner
             key={provider.id}
-            className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
-          >
-            <span aria-hidden="true">⚠️</span>
-            <span className="flex-1">{provider.error}</span>
-            <button
-              type="button"
-              onClick={() => setDismissed((prev) => [...prev, provider.id])}
-              aria-label={`Dismiss ${provider.label} warning`}
-              className="rounded px-1 text-amber-500 transition hover:text-amber-900"
-            >
-              ✕
-            </button>
-          </div>
+            text={provider.error}
+            dismissLabel={`Dismiss ${provider.label} warning`}
+            onDismiss={() => setDismissed((prev) => [...prev, provider.id])}
+          />
         ))}
-
-        {notice && (
-          <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            <span aria-hidden="true">⚠️</span>
-            <span className="flex-1">{notice.text}</span>
-            <button
-              type="button"
-              onClick={() => setNotice(null)}
-              aria-label="Dismiss"
-              className="rounded px-1 text-amber-500 transition hover:text-amber-900"
-            >
-              ✕
-            </button>
-          </div>
-        )}
+        {autosave.error && <Banner text={autosave.error} onDismiss={autosave.dismissError} />}
+        {notice && <Banner text={notice} onDismiss={() => setNotice(null)} />}
 
         <ContextBar
           value={system}
-          onChange={updateSystem}
+          onChange={setSystem}
           think={think}
-          onThinkChange={updateThink}
+          onThinkChange={setThink}
           onClear={newChat}
           canClear={Object.values(transcripts).some((turns) => turns.length > 0)}
           prompts={prompts}
@@ -646,18 +289,16 @@ export default function App() {
           onDeletePrompt={removePrompt}
         />
 
-        {groups.length > 0 && (
-          <ModelPicker groups={groups} selected={selectedIds} onToggle={toggleModel} />
-        )}
+        {groups.length > 0 && <ModelPicker groups={groups} selected={selectedIds} onToggle={catalogue.toggle} />}
 
-        {registryError ? (
+        {catalogue.error ? (
           <CenteredNotice
             tone="error"
-            message={registryError}
+            message={catalogue.error}
             hint="The API server is not answering. Check that it is running."
-            action={{ label: 'Retry', onClick: () => loadRegistry() }}
+            action={{ label: 'Retry', onClick: () => catalogue.reload() }}
           />
-        ) : loadingRegistry ? (
+        ) : catalogue.loading ? (
           <div className="flex min-h-0 flex-1 items-center justify-center">
             <p className="text-sm text-slate-400">Looking for available models…</p>
           </div>
@@ -690,7 +331,7 @@ export default function App() {
             startedAt={startedAt[VERDICT]}
             groups={groups}
             judgeId={judge?.id}
-            onJudgeChange={updateJudge}
+            onJudgeChange={setJudgeId}
             onCompare={compare}
             onCopy={() => verdict && copy(verdictToMarkdown(verdict))}
             onRemove={dropVerdict}
@@ -701,7 +342,7 @@ export default function App() {
           value={query}
           onChange={setQuery}
           onSend={send}
-          onStop={stop}
+          onStop={streams.stop}
           running={anyRunning}
           disabled={selected.length === 0}
           prompts={prompts}
@@ -711,26 +352,43 @@ export default function App() {
       </main>
 
       <HistoryPanel
-        open={historyOpen}
-        items={historyItems}
-        loading={historyLoading}
-        error={historyError}
+        open={history.open}
+        items={history.items}
+        loading={history.loading}
+        error={history.error}
         activeId={comparisonId}
-        query={historyQuery}
-        onQuery={setHistoryQuery}
+        query={history.query}
+        onQuery={history.search}
         onOpen={openComparison}
         onDelete={removeComparison}
-        onClose={() => setHistoryOpen(false)}
+        onClose={history.hide}
       />
 
       <SettingsModal
         open={settingsOpen}
         providers={keySettings}
         onClose={() => setSettingsOpen(false)}
-        onSave={handleSaveKey}
-        onClear={handleClearKey}
+        onSave={async (provider, apiKey) => applyProvider(await saveKey(provider, apiKey))}
+        onClear={async (provider) => applyProvider(await clearKey(provider))}
         onTest={testKey}
       />
+    </div>
+  );
+}
+
+function Banner({ text, onDismiss, dismissLabel = 'Dismiss' }) {
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+      <span aria-hidden="true">⚠️</span>
+      <span className="flex-1">{text}</span>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label={dismissLabel}
+        className="rounded px-1 text-amber-500 transition hover:text-amber-900"
+      >
+        ✕
+      </button>
     </div>
   );
 }

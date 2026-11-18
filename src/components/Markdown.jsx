@@ -1,30 +1,14 @@
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { Suspense, lazy } from 'react';
 
-/**
- * Model output is markdown. react-markdown does not render raw HTML unless
- * rehype-raw is added, which it deliberately is not, so model output cannot
- * inject markup.
- */
-const COMPONENTS = {
-  // Tables and long code lines scroll inside the panel rather than widening it.
-  table: ({ node, ...props }) => (
-    <div className="overflow-x-auto">
-      <table {...props} />
-    </div>
-  ),
-  pre: ({ node, ...props }) => (
-    <pre className="overflow-x-auto" {...props} />
-  ),
-  a: ({ node, ...props }) => <a target="_blank" rel="noreferrer" {...props} />,
-};
+// The markdown parser is most of the bundle and nothing needs it until the
+// first answer arrives, so it loads on its own, after the page.
+const MarkdownRenderer = lazy(() => import('./MarkdownRenderer.jsx'));
 
+/** Model output as markdown; the plain text stands in for the moment it takes to load. */
 export default function Markdown({ children, className = '' }) {
   return (
-    <div className={`prose prose-sm prose-slate max-w-none prose-pre:my-2 prose-pre:bg-slate-100 prose-pre:text-slate-800 prose-headings:mt-3 prose-headings:mb-1 prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-table:my-2 ${className}`}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={COMPONENTS}>
-        {children}
-      </ReactMarkdown>
-    </div>
+    <Suspense fallback={<p className={`whitespace-pre-wrap text-sm ${className}`}>{children}</p>}>
+      <MarkdownRenderer className={className}>{children}</MarkdownRenderer>
+    </Suspense>
   );
 }

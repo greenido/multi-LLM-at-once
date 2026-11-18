@@ -138,7 +138,7 @@ export function openAiCompatible({
           headers: { Authorization: `Bearer ${key}` },
         });
       } catch (error) {
-        throw new Error(describeNetworkError(error, label));
+        throw new Error(describeNetworkError(error, label), { cause: error });
       }
       if (!response.ok) throw new Error(await describeResponseError(response, label));
 
@@ -180,7 +180,7 @@ export function openAiCompatible({
         });
       } catch (error) {
         if (error.name === 'AbortError') throw error;
-        throw new Error(describeNetworkError(error, label));
+        throw new Error(describeNetworkError(error, label), { cause: error });
       }
       if (!response.ok) throw new Error(await describeResponseError(response, label));
 
