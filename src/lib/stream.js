@@ -1,3 +1,5 @@
+import { hasSettings } from './modelSettings.js';
+
 /**
  * Optional measurements a usage frame can carry beyond the two token counts:
  * how many of the output tokens were reasoning; how long the model took to
@@ -10,7 +12,8 @@ const USAGE_EXTRAS = ['reasoningTokens', 'loadMs', 'evalMs', 'costUsd'];
  * Reads the newline-delimited JSON stream that POST /query returns, calling
  * onChunk for each piece of the answer as it arrives, onReasoning for each
  * piece of the reasoning ahead of it, and onUsage with the token counts the
- * provider reported. `think` asks models that can reason to show it.
+ * provider reported. `think` asks models that can reason to show it;
+ * `settings` is the panel's temperature and answer cap, when it has them.
  *
  * Resolves with how the answer ended: `truncated` says why, for one that ended
  * before it was finished — 'length' for the token limit.
@@ -20,11 +23,11 @@ const USAGE_EXTRAS = ['reasoningTokens', 'loadMs', 'evalMs', 'costUsd'];
  * `signal` is aborted so the caller can tell a cancellation apart from a
  * failure.
  */
-export async function streamQuery({ model, messages, system, think = false, signal, onChunk, onReasoning, onUsage }) {
+export async function streamQuery({ model, messages, system, think = false, settings, signal, onChunk, onReasoning, onUsage }) {
   const response = await fetch('/query', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, messages, system, think }),
+    body: JSON.stringify({ model, messages, system, think, ...(hasSettings(settings) ? { settings } : {}) }),
     signal,
   });
 

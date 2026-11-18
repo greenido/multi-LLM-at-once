@@ -766,6 +766,67 @@ describe('when a provider says no', () => {
   });
 });
 
+describe('the settings of a panel', () => {
+  const SETTINGS = { temperature: 0.3, maxTokens: 256 };
+
+  it('are left out entirely when there are none, so each provider keeps its defaults', async () => {
+    await drain(groq);
+    assert.equal('temperature' in seen.body, false);
+    assert.equal('max_tokens' in seen.body, false);
+    await drain(gemini);
+    assert.equal('generationConfig' in seen.body, false);
+    await drain(ollama);
+    assert.equal('options' in seen.body, false);
+  });
+
+  it('go to the chat completions API as temperature and max_tokens', async () => {
+    await drain(groq, { settings: SETTINGS });
+    assert.equal(seen.body.temperature, 0.3);
+    assert.equal(seen.body.max_tokens, 256);
+  });
+
+  it('go to OpenAI as max_completion_tokens, which its reasoning models require', async () => {
+    await drain(openai, { settings: SETTINGS });
+    assert.equal(seen.body.temperature, 0.3);
+    assert.equal(seen.body.max_completion_tokens, 256);
+    assert.equal('max_tokens' in seen.body, false);
+  });
+
+  it('replace the share of max_tokens that Anthropic gives the answer', async () => {
+    await drain(anthropic, { settings: SETTINGS });
+    assert.equal(seen.body.temperature, 0.3);
+    assert.equal(seen.body.max_tokens, 256);
+    // A model that may think still gets its room on top.
+    await drain(anthropic, { settings: SETTINGS, thinking: 'adaptive' });
+    assert.equal(seen.body.max_tokens, 256 + 16_000);
+  });
+
+  it('leave temperature off a Claude asked to think, which the API refuses', async () => {
+    await drain(anthropic, { settings: SETTINGS, think: true, thinking: 'enabled' });
+    assert.equal('temperature' in seen.body, false);
+    assert.equal(seen.body.thinking.type, 'enabled');
+  });
+
+  it('go to Gemini in generationConfig, beside a request for its thoughts', async () => {
+    await drain(gemini, { settings: SETTINGS, think: true, thinking: true });
+    assert.deepEqual(seen.body.generationConfig, {
+      temperature: 0.3,
+      maxOutputTokens: 256,
+      thinkingConfig: { includeThoughts: true },
+    });
+  });
+
+  it('go to Ollama as options.temperature and num_predict', async () => {
+    await drain(ollama, { settings: SETTINGS });
+    assert.deepEqual(seen.body.options, { temperature: 0.3, num_predict: 256 });
+  });
+
+  it('send a temperature of zero, which is a setting and not an absence of one', async () => {
+    await drain(groq, { settings: { temperature: 0 } });
+    assert.equal(seen.body.temperature, 0);
+  });
+});
+
 describe('Ollama, when something is wrong', () => {
   it('says to start it when it is not running', async () => {
     const saved = process.env.OLLAMA_URL;

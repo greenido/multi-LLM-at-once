@@ -15,6 +15,7 @@ import { usePrompts } from './hooks/usePrompts.js';
 import { useStreams } from './hooks/useStreams.js';
 import { useTranscripts } from './hooks/useTranscripts.js';
 import { deleteComparison, getComparison, newId } from './lib/history.js';
+import { cleanSettings } from './lib/modelSettings.js';
 import { clearKey, fetchSettings, saveKey, testKey } from './lib/settings.js';
 import { buildMarkdown, downloadText, exportFilename, toMessages } from './lib/transcript.js';
 import { JUDGE_SYSTEM, buildJudgePrompt, latestExchange, verdictToMarkdown, withVerdict } from './lib/verdict.js';
@@ -37,6 +38,7 @@ const GRID_COLUMNS = {
 
 const isBoolean = (value) => typeof value === 'boolean';
 const isString = (value) => typeof value === 'string';
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 export default function App() {
   const catalogue = useCatalogue();
@@ -51,6 +53,9 @@ export default function App() {
   const [think, setThink] = usePersistentState('multi-llm.think', false, isBoolean);
   // The model that judges, as the user last picked it.
   const [judgeId, setJudgeId] = usePersistentState('multi-llm.judge', null);
+  // Each model's own temperature and answer cap, by model id. Kept for a model
+  // whose panel is closed, so it comes back as it was.
+  const [modelSettings, setModelSettings] = usePersistentState('multi-llm.model-settings', {}, isPlainObject);
   const [query, setQuery] = useState('');
 
   const { transcripts, setTranscripts, appendTurn, patchLastTurn } = useTranscripts();
@@ -76,6 +81,16 @@ export default function App() {
   // the one last picked, while it is still available, or else the first panel's.
   const exchange = useMemo(() => latestExchange(selected, transcripts), [selected, transcripts]);
   const judge = available.find((model) => model.id === judgeId) ?? selected[0] ?? null;
+  // Checked against each model's provider, and memoized so a panel's settings
+  // keep their identity while another panel streams.
+  const panelSettings = useMemo(
+    () => Object.fromEntries(selected.map((model) => [model.id, cleanSettings(modelSettings[model.id], model.provider)])),
+    [selected, modelSettings],
+  );
+  const changeSettings = useCallback(
+    (modelId, change) => setModelSettings((all) => ({ ...all, [modelId]: change(all[modelId] ?? {}) })),
+    [setModelSettings],
+  );
 
   // A provider that failed and has nothing to offer would otherwise vanish from
   // the picker without saying why — the usual case being Ollama not running.
@@ -163,6 +178,7 @@ export default function App() {
       messages,
       system,
       think,
+      settings: panelSettings[model.id],
       begin: (turn) => appendTurn(model.id, turn),
       update: (patchTurn) => patchLastTurn(model.id, patchTurn),
     });
@@ -317,8 +333,10 @@ export default function App() {
                 model={model}
                 turns={transcripts[model.id] ?? NO_TURNS}
                 startedAt={startedAt[model.id]}
+                settings={panelSettings[model.id]}
                 onCopy={copy}
                 onRetry={onRetry}
+                onSettingsChange={changeSettings}
               />
             ))}
           </div>

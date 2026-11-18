@@ -68,12 +68,17 @@ export const gemini = {
     return sortModels([...thinks.keys()]).map((name) => (thinks.get(name) ? { name, thinking: true } : { name }));
   },
 
-  async *chat({ key, model, messages, system, think, thinking, signal }) {
+  async *chat({ key, model, messages, system, think, thinking, settings = {}, signal }) {
+    const generationConfig = {
+      ...(settings.temperature !== undefined ? { temperature: settings.temperature } : {}),
+      ...(settings.maxTokens !== undefined ? { maxOutputTokens: settings.maxTokens } : {}),
+      // A thinking model reasons whether or not it is asked to show it.
+      ...(think && thinking ? { thinkingConfig: { includeThoughts: true } } : {}),
+    };
     const body = {
       contents: toContents(messages),
       ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
-      // A thinking model reasons whether or not it is asked to show it.
-      ...(think && thinking ? { generationConfig: { thinkingConfig: { includeThoughts: true } } } : {}),
+      ...(Object.keys(generationConfig).length > 0 ? { generationConfig } : {}),
     };
 
     let response;

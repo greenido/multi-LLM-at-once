@@ -151,6 +151,14 @@ describe('the markdown export', () => {
     assert.ok(modelToMarkdown(llama, []).includes('_Nothing asked yet._'));
   });
 
+  it('says what temperature and cap an answer was asked with, when not the defaults', () => {
+    const text = modelToMarkdown(gpt, [
+      { role: 'user', text: 'Why?' },
+      { role: 'assistant', text: 'Because.', ms: 900, settings: { temperature: 0.3, maxTokens: 256 } },
+    ]);
+    assert.ok(text.includes('**AI** · 0.9s · temp 0.3 · max 256 tokens'));
+  });
+
   it('opens with when it was exported and how many models it compares', () => {
     const text = buildMarkdown([gpt, llama], { [gpt.id]: answered }, '', now);
     assert.ok(text.startsWith('# Multi LLM comparison\n\nExported 2026-09-10 14:03 UTC · 2 models'));

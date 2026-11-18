@@ -64,11 +64,14 @@ describe('turnStats', () => {
       thought: null,
       speed: '50 tok/s',
       tokens: `${n(1234)} in · 600 out`,
+      settings: null,
     });
   });
 
   it('says how long a model thought, when its reasoning showed', () => {
     assert.equal(turnStats({ thinkingMs: 12300 }).thought, 'thought for 12.3s');
+    assert.equal(turnStats({ settings: { temperature: 0 } }).settings, 'temp 0');
+    assert.equal(turnStats({}).settings, null);
     assert.equal(turnStats({ ms: 900 }).thought, null);
   });
 

@@ -92,17 +92,21 @@ export const anthropic = {
     );
   },
 
-  async *chat({ key, model, messages, system, think, thinking, signal }) {
+  async *chat({ key, model, messages, system, think, thinking, settings = {}, signal }) {
     // Claude Opus 5, Sonnet 5 and Fable think unasked, silently, so every model
     // that thinks adaptively gets the room, not only one asked to show it.
     const asked = think ? THINKING[thinking] : undefined;
+    // A panel's cap replaces the answer's share; the thinking room stays.
+    const answer = settings.maxTokens ?? MAX_TOKENS;
     const body = {
       model,
       messages,
-      max_tokens: asked || thinking === 'adaptive' ? MAX_TOKENS + THINKING_TOKENS : MAX_TOKENS,
+      max_tokens: asked || thinking === 'adaptive' ? answer + THINKING_TOKENS : answer,
       stream: true,
       ...(system ? { system } : {}),
       ...(asked ? { thinking: asked } : {}),
+      // The API refuses a temperature beside a request to think.
+      ...(settings.temperature !== undefined && !asked ? { temperature: settings.temperature } : {}),
     };
 
     let response;

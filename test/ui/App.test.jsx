@@ -152,6 +152,37 @@ describe('history', () => {
   });
 });
 
+describe('the settings of a panel', () => {
+  it('go with that panel only, are shown on its answer, and are remembered', async () => {
+    const { api, user } = await start();
+
+    await user.click(within(panel('gpt-4o')).getByRole('button', { name: 'Tune' }));
+    await user.type(within(panel('gpt-4o')).getByLabelText(/Temperature/), '0.3');
+    await user.type(within(panel('gpt-4o')).getByLabelText(/Max answer tokens/), '256');
+    await ask(user, 'Hello');
+
+    await within(panel('gpt-4o')).findByText(answerFor(GPT));
+    const sent = Object.fromEntries(api.queries().map((query) => [query.body.model, query.body.settings]));
+    expect(sent[GPT]).toEqual({ temperature: 0.3, maxTokens: 256 });
+    expect(sent[LLAMA]).toBeUndefined();
+    expect(within(panel('gpt-4o')).getAllByText('temp 0.3 · max 256 tokens').length).toBeGreaterThan(0);
+    expect(JSON.parse(localStorage.getItem('multi-llm.model-settings'))[GPT]).toEqual({ temperature: 0.3, maxTokens: 256 });
+  });
+
+  it('go back to the defaults on request', async () => {
+    localStorage.setItem('multi-llm.model-settings', JSON.stringify({ [GPT]: { temperature: 0.3 } }));
+    const { api, user } = await start();
+    expect(within(panel('gpt-4o')).getByText('temp 0.3')).toBeTruthy();
+
+    await user.click(within(panel('gpt-4o')).getByRole('button', { name: 'Tune' }));
+    await user.click(within(panel('gpt-4o')).getByRole('button', { name: 'Use defaults' }));
+    await ask(user, 'Hello');
+
+    await within(panel('gpt-4o')).findByText(answerFor(GPT));
+    expect(api.queries().find((query) => query.body.model === GPT).body.settings).toBeUndefined();
+  });
+});
+
 describe('the verdict', () => {
   it('sends every answer by letter to the judge, and a new question clears it', async () => {
     const { api, user } = await start();

@@ -1,4 +1,5 @@
 import { formatDuration } from './duration.js';
+import { describeSettings } from './modelSettings.js';
 
 /**
  * The numbers worth comparing on a finished answer.
@@ -102,5 +103,7 @@ export function turnStats(turn) {
     thought: turn.thinkingMs !== undefined ? `thought for ${formatDuration(turn.thinkingMs)}` : null,
     speed: speed === null ? null : `${speed >= 10 ? Math.round(speed) : speed.toFixed(1)} tok/s`,
     tokens: turn.usage ? formatSpend(turn.usage) : null,
+    // The temperature and answer cap it was asked with, when not the defaults.
+    settings: describeSettings(turn.settings),
   };
 }

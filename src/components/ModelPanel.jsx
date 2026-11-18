@@ -1,9 +1,10 @@
-import { memo, useCallback, useEffect, useRef } from 'react';
+import { memo, useCallback, useEffect, useId, useRef, useState } from 'react';
 import Markdown from './Markdown.jsx';
 import { cutShortNote, modelToMarkdown, totalTokens } from '../lib/transcript.js';
 import { formatDuration, useElapsed } from '../lib/duration.js';
 import { formatSpend, turnStats } from '../lib/metrics.js';
 import { isAtBottom } from '../lib/scroll.js';
+import { MAX_ANSWER_TOKENS, describeSettings, maxTemperature } from '../lib/modelSettings.js';
 
 const ROLE_LABELS = { user: 'Me', assistant: 'AI', error: 'Error' };
 
@@ -57,7 +58,7 @@ function Thinking({ turn }) {
  * verdict renders its answer with it too, so it reads like any other.
  */
 export const Turn = memo(function Turn({ turn }) {
-  const { duration, load, firstToken, speed, tokens } = turnStats(turn);
+  const { duration, load, firstToken, speed, tokens, settings } = turnStats(turn);
   const timing = [duration, load, firstToken, speed].filter(Boolean).join(' · ');
 
   return (
@@ -71,6 +72,11 @@ export const Turn = memo(function Turn({ turn }) {
         )}
         {tokens && (
           <span className="ml-2 font-mono normal-case tabular-nums text-slate-300">{tokens}</span>
+        )}
+        {settings && (
+          <span title="Asked with these settings" className="ml-2 font-mono normal-case text-slate-400">
+            {settings}
+          </span>
         )}
       </span>
 
@@ -102,8 +108,90 @@ export const Turn = memo(function Turn({ turn }) {
   );
 });
 
-function ModelPanel({ model, turns, startedAt, onCopy, onRetry }) {
+/**
+ * A panel's temperature and answer cap. Blank is the provider's default. A
+ * value is kept as typed while it is being typed, and only a valid one is
+ * passed on — "0." on the way to "0.5" is not an error.
+ */
+function PanelSettings({ model, settings, onChange }) {
+  const id = useId();
+  const highest = maxTemperature(model.provider);
+  const [draft, setDraft] = useState(() => ({
+    temperature: settings.temperature?.toString() ?? '',
+    maxTokens: settings.maxTokens?.toString() ?? '',
+  }));
+
+  const commit = (field, text, valid) => {
+    setDraft((current) => ({ ...current, [field]: text }));
+    if (text.trim() === '') {
+      onChange(model.id, (current) => {
+        const { [field]: _dropped, ...rest } = current ?? {};
+        return rest;
+      });
+      return;
+    }
+    const value = Number(text);
+    if (valid(value)) onChange(model.id, (current) => ({ ...current, [field]: value }));
+  };
+
+  const input =
+    'w-20 rounded-md border border-slate-300 bg-white px-2 py-1 font-mono text-xs text-slate-700 outline-none focus:border-slate-400 invalid:border-red-300';
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs text-slate-500">
+      <label htmlFor={`${id}-temperature`} className="flex items-center gap-1.5">
+        Temperature
+        <input
+          id={`${id}-temperature`}
+          type="number"
+          inputMode="decimal"
+          min="0"
+          max={highest}
+          step="0.1"
+          placeholder="default"
+          value={draft.temperature}
+          onChange={(event) =>
+            commit('temperature', event.target.value, (value) => Number.isFinite(value) && value >= 0 && value <= highest)
+          }
+          className={input}
+        />
+        <span className="text-slate-400">0–{highest}</span>
+      </label>
+      <label htmlFor={`${id}-max`} className="flex items-center gap-1.5">
+        Max answer tokens
+        <input
+          id={`${id}-max`}
+          type="number"
+          inputMode="numeric"
+          min="1"
+          max={MAX_ANSWER_TOKENS}
+          step="1"
+          placeholder="default"
+          value={draft.maxTokens}
+          onChange={(event) =>
+            commit('maxTokens', event.target.value, (value) => Number.isInteger(value) && value >= 1 && value <= MAX_ANSWER_TOKENS)
+          }
+          className={input}
+        />
+      </label>
+      <button
+        type="button"
+        onClick={() => {
+          setDraft({ temperature: '', maxTokens: '' });
+          onChange(model.id, () => ({}));
+        }}
+        className="ml-auto rounded-md px-2 py-1 font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+      >
+        Use defaults
+      </button>
+    </div>
+  );
+}
+
+function ModelPanel({ model, turns, startedAt, settings, onCopy, onRetry, onSettingsChange }) {
   const running = Boolean(startedAt);
+  const [tuning, setTuning] = useState(false);
+  const tuned = describeSettings(settings);
   const asked = turns.some((turn) => turn.role === 'user');
 
   // Cloud models bill by the token, so the panel keeps a running total.
@@ -142,6 +230,12 @@ function ModelPanel({ model, turns, startedAt, onCopy, onRetry }) {
 
         {running && <ElapsedTime startedAt={startedAt} label={model.label} />}
 
+        {tuned && (
+          <span title="This panel's own settings" className="font-mono text-[11px] text-slate-500">
+            {tuned}
+          </span>
+        )}
+
         {spent && (
           <span
             title="Tokens used by this conversation, and their cost where the provider publishes prices"
@@ -153,10 +247,20 @@ function ModelPanel({ model, turns, startedAt, onCopy, onRetry }) {
 
         <button
           type="button"
+          onClick={() => setTuning((open) => !open)}
+          aria-expanded={tuning}
+          title={`Temperature and answer length for ${model.label}`}
+          className="ml-auto rounded-md px-2 py-1 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 aria-expanded:bg-slate-100 aria-expanded:text-slate-900"
+        >
+          Tune
+        </button>
+
+        <button
+          type="button"
           onClick={() => onRetry(model)}
           disabled={running || !asked}
           title={`Ask ${model.label} the last question again, replacing its answer. The other panels are not re-asked.`}
-          className="ml-auto rounded-md px-2 py-1 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-md px-2 py-1 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
         >
           Retry
         </button>
@@ -171,6 +275,8 @@ function ModelPanel({ model, turns, startedAt, onCopy, onRetry }) {
           Copy
         </button>
       </div>
+
+      {tuning && <PanelSettings model={model} settings={settings} onChange={onSettingsChange} />}
 
       <div
         ref={scroller}
