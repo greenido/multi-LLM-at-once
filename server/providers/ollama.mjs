@@ -30,6 +30,31 @@ export function describeOllamaError(error, model) {
   return message;
 }
 
+//
+// What a model can do — whether it can be asked to think — is fixed for a given
+// pull, so it is asked for once rather than before every question. The cache
+// is keyed by the digest the listing reported, which changes when the model is
+// pulled again under the same name.
+//
+const digests = new Map();
+const capabilities = new Map();
+
+function capabilitiesOf(client, model) {
+  const key = `${model}@${digests.get(model) ?? ''}`;
+  if (!capabilities.has(key)) {
+    const asked = client.show({ model }).then(
+      (shown) => shown.capabilities ?? [],
+      (error) => {
+        // A failure is not an answer: the next question asks again.
+        capabilities.delete(key);
+        throw error;
+      },
+    );
+    capabilities.set(key, asked);
+  }
+  return capabilities.get(key);
+}
+
 const nanosToMs = (field, nanos) => (nanos > 0 ? { [field]: Math.round(nanos / 1e6) } : {});
 
 export const ollama = {
@@ -42,6 +67,7 @@ export const ollama = {
   async listModels() {
     try {
       const { models = [] } = await new Ollama({ host: ollamaUrl() }).list();
+      for (const { name, digest } of models) if (name) digests.set(name, digest);
       return models
         .map((entry) => entry.name)
         .filter(Boolean)
@@ -63,7 +89,7 @@ export const ollama = {
       // A thinking model thinks by default, and its reasoning arrives apart
       // from the answer. Asked to, though, a model that cannot think fails the
       // request outright, so only one whose capabilities say it can is asked.
-      const canThink = think && (await client.show({ model })).capabilities?.includes('thinking');
+      const canThink = think && (await capabilitiesOf(client, model)).includes('thinking');
 
       const stream = await client.chat({
         model,

@@ -22,6 +22,8 @@ const KEY = 'sk-test-000000000000000000000000004f2a';
 let seen = null;
 /** How many times Ollama was asked what a model can do. */
 let shows = 0;
+/** What the stub's listing says the thinker model's digest is. */
+let thinkerDigest = 'd1';
 /**
  * Why the stub says an answer ended, in the dialect's own words, when a test
  * wants something other than a normal finish.
@@ -147,6 +149,10 @@ before(async () => {
     seen = { headers: req.headers, body, path, query: url.search };
 
     // Ollama says what a model can do. Here, any model named for it can think.
+    // The digest changes when a model is pulled again, which a test can do.
+    if (dialect === 'ollama' && path === '/api/tags') {
+      return json(res, { models: [{ name: 'thinker:latest', digest: thinkerDigest }, { name: 'plain:latest', digest: 'd2' }] });
+    }
     if (dialect === 'ollama' && path === '/api/show') {
       shows += 1;
       return json(res, { capabilities: body.model.startsWith('thinker') ? ['completion', 'thinking'] : ['completion'] });
@@ -562,6 +568,26 @@ describe('asking a model to think', () => {
     assert.equal(seen.body.think, true);
     await drain(ollama, { think: true });
     assert.equal('think' in seen.body, false);
+  });
+
+  it('Ollama asks what a model can do once, not on every question', async () => {
+    await ollama.listModels();
+    await drain(ollama, { model: 'thinker:latest', think: true });
+    const before = shows;
+    await drain(ollama, { model: 'thinker:latest', think: true });
+    assert.equal(shows, before);
+    assert.equal(seen.body.think, true);
+  });
+
+  it('Ollama asks again once the model has been pulled anew', async () => {
+    await ollama.listModels();
+    await drain(ollama, { model: 'thinker:latest', think: true });
+    thinkerDigest = 'd1-repulled';
+    await ollama.listModels();
+    const before = shows;
+    await drain(ollama, { model: 'thinker:latest', think: true });
+    assert.equal(shows, before + 1);
+    thinkerDigest = 'd1';
   });
 
   it('Ollama makes no extra round trip when the switch is off', async () => {
