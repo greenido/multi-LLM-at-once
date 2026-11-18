@@ -15,9 +15,10 @@ export function formatDuration(ms) {
 export function useElapsed(startedAt) {
   const [now, setNow] = useState(() => Date.now());
 
+  // `now` may be from before this run began until the first tick, which the
+  // floor at zero below turns into 0.0s rather than a negative time.
   useEffect(() => {
     if (!startedAt) return;
-    setNow(Date.now());
     const id = setInterval(() => setNow(Date.now()), 100);
     return () => clearInterval(id);
   }, [startedAt]);

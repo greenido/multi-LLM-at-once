@@ -77,7 +77,7 @@ export const anthropic = {
     try {
       response = await fetch(`${baseUrl()}/models?limit=100`, { headers: headers(key) });
     } catch (error) {
-      throw new Error(describeNetworkError(error, LABEL));
+      throw new Error(describeNetworkError(error, LABEL), { cause: error });
     }
     if (!response.ok) throw new Error(await describeResponseError(response, LABEL));
 
@@ -115,7 +115,7 @@ export const anthropic = {
       });
     } catch (error) {
       if (error.name === 'AbortError') throw error;
-      throw new Error(describeNetworkError(error, LABEL));
+      throw new Error(describeNetworkError(error, LABEL), { cause: error });
     }
     if (!response.ok) throw new Error(await describeResponseError(response, LABEL));
 

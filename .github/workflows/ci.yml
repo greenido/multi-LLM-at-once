@@ -47,7 +47,7 @@ jobs:
       - run: npm test
 
   build:
-    name: build and audit
+    name: lint, build and audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -59,8 +59,12 @@ jobs:
 
       - run: npm ci
 
-      # No component tests, so this is what stands between a broken import or
-      # a malformed JSX file and main.
+      # Hooks used out of order and effects that read state they do not list
+      # pass every test and the build alike; the linter is what sees them.
+      - run: npm run lint
+
+      # The component tests cover the flows, not every import; this is what
+      # stands between a broken import or a malformed JSX file and main.
       - run: npm run build
 
       # Six direct dependencies and no vendor SDKs — keeping this at zero is

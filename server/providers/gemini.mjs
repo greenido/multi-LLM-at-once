@@ -52,7 +52,7 @@ export const gemini = {
         headers: { 'x-goog-api-key': key },
       });
     } catch (error) {
-      throw new Error(describeNetworkError(error, LABEL));
+      throw new Error(describeNetworkError(error, LABEL), { cause: error });
     }
     if (!response.ok) throw new Error(await describeResponseError(response, LABEL));
 
@@ -86,7 +86,7 @@ export const gemini = {
       });
     } catch (error) {
       if (error.name === 'AbortError') throw error;
-      throw new Error(describeNetworkError(error, LABEL));
+      throw new Error(describeNetworkError(error, LABEL), { cause: error });
     }
     if (!response.ok) throw new Error(await describeResponseError(response, LABEL));
 
