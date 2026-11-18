@@ -215,6 +215,13 @@ it still opens.
 npm test
 ```
 
+```bash
+npm run lint
+```
+
+`npm test` runs both suites: `npm run test:server` (node:test, the server and
+the libraries) and `npm run test:ui` (Vitest in jsdom, the components).
+
 Unit tests cover the transcript and history logic, the Markdown export, the
 timing and speed metrics, the verdict's prompt — which answers it compares,
 and that no model's name reaches the judge — the model registry, the streaming NDJSON parser, the
@@ -243,19 +250,30 @@ slowly, one that goes quiet partway, one that never starts and one that runs
 into its token limit, and check that each ends the way it should: the slow one
 finishing, and the rest saying why they did not.
 
+The component tests in `test/ui/` render the whole app against a fake API
+that answers `/query` in its real NDJSON format and can hold a stream open.
+They cover what `App.jsx` coordinates: every panel asked at once with only its
+own thread, one failing without holding up the rest, a comparison saved once
+its answers are in and not mid-stream, Stop keeping what streamed, Retry
+re-asking one panel, a saved comparison opened mid-stream without the old
+answer's late words landing in it, and the verdict reading answers by letter.
+
 No test reaches a real provider, and none needs Ollama running.
 
 ### On every push and pull request
 
-`.github/workflows/ci.yml` runs four things, none of which need a secret:
+`.github/workflows/ci.yml` runs these, none of which need a secret:
 
-- **the suite, on Node 22.13 and 24.** 22.13 is the floor `package.json`
+- **both suites, on Node 22.13 and 24.** 22.13 is the floor `package.json`
   declares, so it is the version that can actually break; `node:sqlite`, which
   the key store is built on, is still an experimental API, and testing only the
   newest release would hide the day it changes underneath the floor.
-- **`npm run build`.** There are no component tests, so this is what stands
-  between a broken import and `main`.
-- **`npm audit`,** blocking on high and critical only. Six direct
+- **`npm run lint`.** ESLint with the React hooks rules: hooks used out of
+  order and effects that read state they do not list pass the tests and the
+  build alike.
+- **`npm run build`.** The component tests cover the flows, not every import,
+  so this is what stands between a broken import and `main`.
+- **`npm audit`,** blocking on high and critical only. Five direct
   dependencies and no vendor SDKs — keeping this at zero is cheap.
 - **a scan of the added lines for credentials.** This app's whole design is
   that keys stay out of the browser and out of git, and that is worth
@@ -286,10 +304,14 @@ All optional.
 
 ```
 index.html            Vite entry
-src/App.jsx           state: models, selection, transcripts, in-flight requests
+src/App.jsx           wires the hooks to the components
+src/hooks/            useCatalogue (models, selection), useStreams (requests in
+                      flight, Stop), useAutosave, useHistorySheet, usePrompts,
+                      useTranscripts, usePersistentState
 src/components/       Navbar, ContextBar, ModelPicker, ModelPanel, QueryBar,
                       GrowingTextarea, HistoryPanel, PromptMenu, DeleteButton,
-                      SettingsModal, Markdown, VerdictPanel
+                      SettingsModal, Markdown (loads MarkdownRenderer on
+                      demand), VerdictPanel
 src/lib/              models (catalogue), settings (keys), history (saved
                       comparisons and prompts), transcript (what is sent back,
                       export), verdict (comparing the answers), metrics
@@ -301,6 +323,7 @@ server/historystore.mjs  saved comparisons and prompts in SQLite
 server/registry.mjs   every provider's models under one namespaced list
 server/providers/     one adapter per provider, plus the shared SSE reader
 test/                 node:test suites
+test/ui/              component tests (Vitest, jsdom) and the fake API
 ```
 
 The browser owns the live conversation and sends it whole with each request,
@@ -425,7 +448,11 @@ prompts are `GET /api/prompts`, `POST /api/prompts` with `{ kind, name, text }`
 - [x] Save and reload past comparisons
 - [x] Show tokens/sec alongside the wall-clock timer
 - [x] Show a model's reasoning, and ask the ones that can to reason
-- [ ] Allow to leverage [llama_index](https://github.com/run-llama/llama_index)
+- [ ] Per-model settings: temperature and a cap on the answer's length
+- [ ] What an answer cost, for every provider with a published price
+- [ ] Dark mode
+- [ ] Pick a winner with the names hidden, and a leaderboard from those picks
+- [ ] Export and import history as JSON
 
 ## License
 
