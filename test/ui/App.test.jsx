@@ -6,7 +6,7 @@
  */
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import App from '../../src/App.jsx';
 import { answerFor, fakeApi } from './fakeApi.jsx';
 
@@ -180,6 +180,32 @@ describe('the settings of a panel', () => {
 
     await within(panel('gpt-4o')).findByText(answerFor(GPT));
     expect(api.queries().find((query) => query.body.model === GPT).body.settings).toBeUndefined();
+  });
+});
+
+describe('the theme', () => {
+  it('can be set to dark or light, and is remembered', async () => {
+    const { user } = await start();
+    const select = screen.getByRole('combobox', { name: 'Theme' });
+
+    await user.selectOptions(select, 'dark');
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
+    expect(JSON.parse(localStorage.getItem('multi-llm.theme'))).toBe('dark');
+
+    await user.selectOptions(select, 'light');
+    expect(document.documentElement.classList.contains('dark')).toBe(false);
+  });
+
+  it('follows the system by default, as it changes', async () => {
+    let listener;
+    const query = { matches: true, addEventListener: (_, fn) => { listener = fn; }, removeEventListener: () => {} };
+    vi.stubGlobal('matchMedia', () => query);
+    await start();
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
+
+    query.matches = false;
+    act(() => listener());
+    expect(document.documentElement.classList.contains('dark')).toBe(false);
   });
 });
 

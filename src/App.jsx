@@ -12,6 +12,7 @@ import { useCatalogue } from './hooks/useCatalogue.js';
 import { useHistorySheet } from './hooks/useHistorySheet.js';
 import { usePersistentState } from './hooks/usePersistentState.js';
 import { usePrompts } from './hooks/usePrompts.js';
+import { useTheme } from './hooks/useTheme.js';
 import { useStreams } from './hooks/useStreams.js';
 import { useTranscripts } from './hooks/useTranscripts.js';
 import { deleteComparison, getComparison, newId } from './lib/history.js';
@@ -56,6 +57,7 @@ export default function App() {
   // Each model's own temperature and answer cap, by model id. Kept for a model
   // whose panel is closed, so it comes back as it was.
   const [modelSettings, setModelSettings] = usePersistentState('multi-llm.model-settings', {}, isPlainObject);
+  const [theme, setTheme] = useTheme();
   const [query, setQuery] = useState('');
 
   const { transcripts, setTranscripts, appendTurn, patchLastTurn } = useTranscripts();
@@ -273,6 +275,8 @@ export default function App() {
     <div className="flex h-full flex-col">
       <Navbar
         onOpenHistory={history.show}
+        theme={theme}
+        onThemeChange={setTheme}
         onExport={() => downloadText(exportFilename(), exportMarkdown())}
         onCopyAll={() => copy(exportMarkdown())}
         onOpenSettings={() => {

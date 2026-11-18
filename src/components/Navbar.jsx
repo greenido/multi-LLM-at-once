@@ -6,7 +6,9 @@ const LINKS = [
 const itemClass =
   'rounded-md px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900';
 
-export default function Navbar({ onOpenHistory, onExport, onCopyAll, onOpenSettings }) {
+const THEME_LABELS = { system: 'System theme', light: 'Light', dark: 'Dark' };
+
+export default function Navbar({ onOpenHistory, onExport, onCopyAll, onOpenSettings, theme, onThemeChange }) {
   return (
     <header className="border-b border-slate-200 bg-white">
       <nav className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-2 px-4 py-3">
@@ -24,6 +26,18 @@ export default function Navbar({ onOpenHistory, onExport, onCopyAll, onOpenSetti
         <button type="button" onClick={onOpenSettings} className={itemClass}>
           Settings
         </button>
+        <select
+          value={theme}
+          onChange={(event) => onThemeChange(event.target.value)}
+          aria-label="Theme"
+          className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm font-medium text-slate-600 outline-none transition hover:text-slate-900 focus:border-slate-400"
+        >
+          {Object.entries(THEME_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
         {LINKS.map((link) => (
           <a key={link.label} href={link.href} target="_blank" rel="noreferrer" className={itemClass}>
             {link.label}

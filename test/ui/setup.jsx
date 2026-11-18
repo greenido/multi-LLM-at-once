@@ -24,5 +24,6 @@ Object.defineProperty(navigator, 'clipboard', {
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  document.documentElement.classList.remove('dark');
   vi.unstubAllGlobals();
 });
