@@ -14,6 +14,7 @@ import { gemini } from './providers/gemini.mjs';
 import { ollama } from './providers/ollama.mjs';
 import { deepseek, groq, mistral, openai, openrouter, xai } from './providers/openai.mjs';
 import { getKey, keyStatus } from './keystore.mjs';
+import { listPrice, priceCatalogue } from './prices.mjs';
 
 export const PROVIDERS = [ollama, openai, anthropic, gemini, xai, openrouter, groq, mistral, deepseek];
 const BY_ID = new Map(PROVIDERS.map((provider) => [provider.id, provider]));
@@ -111,15 +112,18 @@ function listProvider(provider) {
  * parallel: one slow or unreachable provider should not hold up the rest.
  */
 export async function listAll() {
-  const results = await Promise.all(
-    PROVIDERS.map(async (provider) => [provider, await listProvider(provider)]),
-  );
+  const [results, prices] = await Promise.all([
+    Promise.all(PROVIDERS.map(async (provider) => [provider, await listProvider(provider)])),
+    priceCatalogue(),
+  ]);
 
   const models = [];
   const providers = [];
 
   for (const [provider, result] of results) {
-    for (const { name, pricing } of result.models) {
+    for (const { name, pricing: listed } of result.models) {
+      // A listing's own price wins; a model reached directly gets its list price.
+      const pricing = listed ?? listPrice(provider.id, name, prices);
       models.push({ id: modelId(provider.id, name), provider: provider.id, name, ...(pricing ? { pricing } : {}) });
     }
     providers.push({

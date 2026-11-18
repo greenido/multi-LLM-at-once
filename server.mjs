@@ -347,8 +347,33 @@ app.delete('/api/prompts/:id', (req, res) => {
 //
 const ROLES = new Set(['user', 'assistant']);
 
+// The highest answer cap a panel may set. Well above any model's, so the
+// model's own limit is what refuses a cap too large for it.
+const MAX_ANSWER_TOKENS = 1_000_000;
+
+/**
+ * A panel's settings, or an error message. Both are optional, and a model
+ * given neither answers at its provider's defaults. Temperature is checked
+ * against the widest range any provider takes; a provider with a narrower
+ * one says so itself.
+ */
+function checkSettings(settings) {
+  if (settings === undefined) return null;
+  if (settings === null || typeof settings !== 'object' || Array.isArray(settings)) {
+    return 'settings must be an object when given.';
+  }
+  const { temperature, maxTokens } = settings;
+  if (temperature !== undefined && !(typeof temperature === 'number' && temperature >= 0 && temperature <= 2)) {
+    return 'temperature must be a number from 0 to 2.';
+  }
+  if (maxTokens !== undefined && !(Number.isInteger(maxTokens) && maxTokens >= 1 && maxTokens <= MAX_ANSWER_TOKENS)) {
+    return `maxTokens must be a whole number from 1 to ${MAX_ANSWER_TOKENS.toLocaleString('en-US')}.`;
+  }
+  return null;
+}
+
 app.post('/query', async (req, res) => {
-  const { model, messages, system, think } = req.body ?? {};
+  const { model, messages, system, think, settings } = req.body ?? {};
 
   if (typeof model !== 'string' || !model.trim()) {
     return res.status(400).json({ error: 'A model id is required.' });
@@ -370,6 +395,8 @@ app.post('/query', async (req, res) => {
   if (think !== undefined && typeof think !== 'boolean') {
     return res.status(400).json({ error: 'think must be true or false when given.' });
   }
+  const badSettings = checkSettings(settings);
+  if (badSettings) return res.status(400).json({ error: badSettings });
 
   const parsed = parseModelId(model);
   if (!parsed) {
@@ -388,7 +415,7 @@ app.post('/query', async (req, res) => {
   }
 
   console.log(
-    `☀️ ${model}: ${messages.length} message(s), system ${system?.trim() ? 'set' : 'unset'}${think ? ', thinking' : ''}`,
+    `☀️ ${model}: ${messages.length} message(s), system ${system?.trim() ? 'set' : 'unset'}${think ? ', thinking' : ''}${settings ? `, settings ${JSON.stringify(settings)}` : ''}`,
   );
 
   // The browser going away, and a model that has gone quiet, both need to stop
@@ -434,6 +461,12 @@ app.post('/query', async (req, res) => {
     // thinks: whether it can be asked to, and in what form.
     think: think === true,
     thinking: availability.model.thinking,
+    // The panel's temperature and answer cap — only what was set, so each
+    // provider keeps its own default for the rest.
+    settings: {
+      ...(settings?.temperature !== undefined ? { temperature: settings.temperature } : {}),
+      ...(settings?.maxTokens !== undefined ? { maxTokens: settings.maxTokens } : {}),
+    },
     signal: controller.signal,
   })[Symbol.asyncIterator]();
 

@@ -6,7 +6,7 @@
  */
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import App from '../../src/App.jsx';
 import { answerFor, fakeApi } from './fakeApi.jsx';
 
@@ -149,6 +149,63 @@ describe('history', () => {
     const savesBefore = api.saves().filter((call) => call.path.endsWith(SAVED.id)).length;
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(api.saves().filter((call) => call.path.endsWith(SAVED.id))).toHaveLength(savesBefore);
+  });
+});
+
+describe('the settings of a panel', () => {
+  it('go with that panel only, are shown on its answer, and are remembered', async () => {
+    const { api, user } = await start();
+
+    await user.click(within(panel('gpt-4o')).getByRole('button', { name: 'Tune' }));
+    await user.type(within(panel('gpt-4o')).getByLabelText(/Temperature/), '0.3');
+    await user.type(within(panel('gpt-4o')).getByLabelText(/Max answer tokens/), '256');
+    await ask(user, 'Hello');
+
+    await within(panel('gpt-4o')).findByText(answerFor(GPT));
+    const sent = Object.fromEntries(api.queries().map((query) => [query.body.model, query.body.settings]));
+    expect(sent[GPT]).toEqual({ temperature: 0.3, maxTokens: 256 });
+    expect(sent[LLAMA]).toBeUndefined();
+    expect(within(panel('gpt-4o')).getAllByText('temp 0.3 · max 256 tokens').length).toBeGreaterThan(0);
+    expect(JSON.parse(localStorage.getItem('multi-llm.model-settings'))[GPT]).toEqual({ temperature: 0.3, maxTokens: 256 });
+  });
+
+  it('go back to the defaults on request', async () => {
+    localStorage.setItem('multi-llm.model-settings', JSON.stringify({ [GPT]: { temperature: 0.3 } }));
+    const { api, user } = await start();
+    expect(within(panel('gpt-4o')).getByText('temp 0.3')).toBeTruthy();
+
+    await user.click(within(panel('gpt-4o')).getByRole('button', { name: 'Tune' }));
+    await user.click(within(panel('gpt-4o')).getByRole('button', { name: 'Use defaults' }));
+    await ask(user, 'Hello');
+
+    await within(panel('gpt-4o')).findByText(answerFor(GPT));
+    expect(api.queries().find((query) => query.body.model === GPT).body.settings).toBeUndefined();
+  });
+});
+
+describe('the theme', () => {
+  it('can be set to dark or light, and is remembered', async () => {
+    const { user } = await start();
+    const select = screen.getByRole('combobox', { name: 'Theme' });
+
+    await user.selectOptions(select, 'dark');
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
+    expect(JSON.parse(localStorage.getItem('multi-llm.theme'))).toBe('dark');
+
+    await user.selectOptions(select, 'light');
+    expect(document.documentElement.classList.contains('dark')).toBe(false);
+  });
+
+  it('follows the system by default, as it changes', async () => {
+    let listener;
+    const query = { matches: true, addEventListener: (_, fn) => { listener = fn; }, removeEventListener: () => {} };
+    vi.stubGlobal('matchMedia', () => query);
+    await start();
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
+
+    query.matches = false;
+    act(() => listener());
+    expect(document.documentElement.classList.contains('dark')).toBe(false);
   });
 });
 

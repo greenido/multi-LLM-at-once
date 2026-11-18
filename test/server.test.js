@@ -125,6 +125,8 @@ before(async () => {
       MISTRAL_API_KEY: '',
       DEEPSEEK_API_KEY: '',
       OPENROUTER_BASE_URL: openrouter,
+      // No price catalogue: nothing here reaches the network.
+      PRICES_URL: '',
     },
     stdio: 'ignore',
   });
@@ -215,6 +217,22 @@ describe('POST /query validation', () => {
     const res = await post({ model: MODEL, messages: ask, system: 42 });
     assert.equal(res.status, 400);
     assert.match((await res.json()).error, /system must be a string/i);
+  });
+
+  it('rejects settings that are not an object of known, sane values', async () => {
+    for (const settings of [
+      'hot',
+      { temperature: -0.1 },
+      { temperature: 2.5 },
+      { temperature: '0.7' },
+      { maxTokens: 0 },
+      { maxTokens: 1.5 },
+      { maxTokens: 2_000_000 },
+    ]) {
+      const res = await post({ model: MODEL, messages: ask, settings });
+      assert.equal(res.status, 400, JSON.stringify(settings));
+      assert.match((await res.json()).error, /settings|temperature|maxTokens/);
+    }
   });
 
   it('validates before reaching any provider, so these never 502', async () => {
@@ -604,6 +622,15 @@ describe('a model that reasons', () => {
       { type: 'chunk', text: 'Four.' },
       { type: 'done' },
     ]);
+  });
+
+  it('passes the temperature and answer cap of a panel through to the provider', async () => {
+    await lines(await post({ model: R1, messages: ask }));
+    assert.equal('temperature' in received, false);
+    assert.equal('max_tokens' in received, false);
+    await lines(await post({ model: R1, messages: ask, settings: { temperature: 0.3, maxTokens: 256 } }));
+    assert.equal(received.temperature, 0.3);
+    assert.equal(received.max_tokens, 256);
   });
 
   it('is asked to reason only when the switch is on', async () => {

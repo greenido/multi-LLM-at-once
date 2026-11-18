@@ -88,6 +88,14 @@ describe('totalTokens', () => {
     ]);
     assert.deepEqual(total, { promptTokens: 31, completionTokens: 13, costUsd: 0.75 });
   });
+
+  it('calls a total an estimate when any cost in it is one', () => {
+    const total = totalTokens([
+      turn('assistant', 'a', { usage: { promptTokens: 10, completionTokens: 5, costUsd: 0.25 } }),
+      turn('assistant', 'b', { usage: { promptTokens: 1, completionTokens: 1, costUsd: 0.5, costEstimated: true } }),
+    ]);
+    assert.deepEqual(total, { promptTokens: 11, completionTokens: 6, costUsd: 0.75, costEstimated: true });
+  });
 });
 
 describe('the markdown export', () => {
@@ -149,6 +157,14 @@ describe('the markdown export', () => {
 
   it('says so for a model that has not been asked anything', () => {
     assert.ok(modelToMarkdown(llama, []).includes('_Nothing asked yet._'));
+  });
+
+  it('says what temperature and cap an answer was asked with, when not the defaults', () => {
+    const text = modelToMarkdown(gpt, [
+      { role: 'user', text: 'Why?' },
+      { role: 'assistant', text: 'Because.', ms: 900, settings: { temperature: 0.3, maxTokens: 256 } },
+    ]);
+    assert.ok(text.includes('**AI** · 0.9s · temp 0.3 · max 256 tokens'));
   });
 
   it('opens with when it was exported and how many models it compares', () => {

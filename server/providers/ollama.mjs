@@ -128,12 +128,16 @@ export const ollama = {
     }
   },
 
-  async *chat({ model, messages, system, think, signal }) {
+  async *chat({ model, messages, system, think, settings = {}, signal }) {
     try {
       // A thinking model thinks by default, and its reasoning arrives apart
       // from the answer. Asked to, though, a model that cannot think fails the
       // request outright, so only one whose capabilities say it can is asked.
       const canThink = think && (await capabilitiesOf(model)).includes('thinking');
+      const options = {
+        ...(settings.temperature !== undefined ? { temperature: settings.temperature } : {}),
+        ...(settings.maxTokens !== undefined ? { num_predict: settings.maxTokens } : {}),
+      };
 
       const response = await post(
         '/api/chat',
@@ -142,6 +146,7 @@ export const ollama = {
           messages: system ? [{ role: 'system', content: system }, ...messages] : messages,
           stream: true,
           ...(canThink ? { think: true } : {}),
+          ...(Object.keys(options).length > 0 ? { options } : {}),
         },
         signal,
       );

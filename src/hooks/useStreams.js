@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { withCost } from '../lib/metrics.js';
+import { hasSettings } from '../lib/modelSettings.js';
 import { streamQuery } from '../lib/stream.js';
 
 // Tokens can arrive faster than it is worth re-rendering for, so chunks are
@@ -49,7 +50,7 @@ export function useStreams() {
    * names the request, for Stop and the spinner; `begin` puts the empty turn
    * where it will grow, and `update` patches it.
    */
-  const streamTurn = useCallback(async ({ key, model, messages, system, think, begin, update }) => {
+  const streamTurn = useCallback(async ({ key, model, messages, system, think, settings, begin, update }) => {
     const begunAt = Date.now();
     const controller = new AbortController();
     controllers.current.set(key, controller);
@@ -63,8 +64,8 @@ export function useStreams() {
       if (conversation.current === generation) update(patchTurn);
     };
 
-    // The turn the tokens stream into.
-    begin({ role: 'assistant', text: '', streaming: true });
+    // The turn the tokens stream into, with the settings it was asked with.
+    begin({ role: 'assistant', text: '', streaming: true, ...(hasSettings(settings) ? { settings } : {}) });
 
     let pending = '';
     let pendingReasoning = '';
@@ -108,6 +109,7 @@ export function useStreams() {
         messages,
         system,
         think,
+        settings,
         signal: controller.signal,
         onReasoning: (chunk) => {
           firstTokenAt ??= Date.now();

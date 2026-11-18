@@ -11,11 +11,12 @@ import { after, before, describe, it } from 'node:test';
  */
 process.env.KEYS_DB = ':memory:';
 process.env.OLLAMA_URL = 'http://127.0.0.1:1';
-for (const name of ['OPENAI', 'ANTHROPIC', 'GEMINI', 'XAI', 'MISTRAL', 'DEEPSEEK']) {
+for (const name of ['ANTHROPIC', 'GEMINI', 'XAI', 'MISTRAL', 'DEEPSEEK']) {
   process.env[`${name}_API_KEY`] = '';
 }
 // Invented values — never a real credential.
 process.env.OPENROUTER_API_KEY = 'sk-test-000000000000000000000000004f2a';
+process.env.OPENAI_API_KEY = 'sk-test-000000000000000000000000004f2a';
 process.env.GROQ_API_KEY = 'sk-test-000000000000000000000000004f2a';
 
 let server;
@@ -27,6 +28,17 @@ let groqDown = false;
 
 before(async () => {
   server = createServer((req, res) => {
+    // OpenRouter's public catalogue, read for the prices of models reached directly.
+    if (req.url.startsWith('/catalogue')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        data: [{ id: 'openai/gpt-4o', pricing: { prompt: '0.0000025', completion: '0.00001' } }],
+      }));
+    }
+    if (req.url.startsWith('/openai/')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ data: [{ id: 'gpt-4o' }] }));
+    }
     if (req.url.startsWith('/groq/')) {
       groqListings += 1;
       if (groqDown) {
@@ -47,6 +59,8 @@ before(async () => {
   const base = `http://127.0.0.1:${server.address().port}`;
   process.env.OPENROUTER_BASE_URL = `${base}/openrouter`;
   process.env.GROQ_BASE_URL = `${base}/groq`;
+  process.env.OPENAI_BASE_URL = `${base}/openai`;
+  process.env.PRICES_URL = `${base}/catalogue/models`;
   registry = await import('../server/registry.mjs');
 });
 
@@ -60,6 +74,15 @@ describe('the catalogue', () => {
       provider: 'openrouter',
       name: 'openai/gpt-4o',
       pricing: { prompt: 0.0000025, completion: 0.00001 },
+    });
+  });
+
+  it('gives a model reached directly its list price from the catalogue, marked as an estimate', async () => {
+    const { models } = await registry.listAll();
+    assert.deepEqual(models.find((model) => model.id === 'openai:gpt-4o').pricing, {
+      prompt: 0.0000025,
+      completion: 0.00001,
+      estimated: true,
     });
   });
 

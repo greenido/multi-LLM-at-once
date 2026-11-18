@@ -1,4 +1,5 @@
 import { formatDuration } from './duration.js';
+import { describeSettings } from './modelSettings.js';
 
 /**
  * The numbers worth comparing on a finished answer.
@@ -51,12 +52,17 @@ export const formatTokens = ({ promptTokens, completionTokens, reasoningTokens }
 
 /**
  * What an answer cost in USD: the figure the provider reported, which accounts
- * for caching and routing, or else its list price times the tokens. Only
- * OpenRouter does either, so for everyone else there is no cost to show.
+ * for caching and routing, or else its list price times the tokens — which is
+ * marked as an estimate, since it accounts for neither. OpenRouter reports
+ * the figure; a model reached directly has its list price at most.
  */
 export function withCost(usage, pricing) {
   if (usage.costUsd !== undefined || !pricing) return usage;
-  return { ...usage, costUsd: usage.promptTokens * pricing.prompt + usage.completionTokens * pricing.completion };
+  return {
+    ...usage,
+    costUsd: usage.promptTokens * pricing.prompt + usage.completionTokens * pricing.completion,
+    costEstimated: true,
+  };
 }
 
 /** "$0.0042", "$1.37", "free". A cent is too coarse for a single answer. */
@@ -82,9 +88,11 @@ function formatPerMillion(perToken) {
   return `$${Math.round(perM)}`;
 }
 
-/** "1,234 in · 567 out", with " · $0.0042" when there is a cost to add. */
+/** "1,234 in · 567 out", with " · $0.0042" when there is a cost to add, or " · ~$0.0042" for an estimate. */
 export const formatSpend = (usage) =>
-  typeof usage.costUsd === 'number' ? `${formatTokens(usage)} · ${formatCost(usage.costUsd)}` : formatTokens(usage);
+  typeof usage.costUsd === 'number'
+    ? `${formatTokens(usage)} · ${usage.costEstimated ? '~' : ''}${formatCost(usage.costUsd)}`
+    : formatTokens(usage);
 
 /**
  * Everything known about how an answer was produced, each already formatted
@@ -102,5 +110,7 @@ export function turnStats(turn) {
     thought: turn.thinkingMs !== undefined ? `thought for ${formatDuration(turn.thinkingMs)}` : null,
     speed: speed === null ? null : `${speed >= 10 ? Math.round(speed) : speed.toFixed(1)} tok/s`,
     tokens: turn.usage ? formatSpend(turn.usage) : null,
+    // The temperature and answer cap it was asked with, when not the defaults.
+    settings: describeSettings(turn.settings),
   };
 }

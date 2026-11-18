@@ -6,6 +6,16 @@
     <title>⛄️ Multi LLMs Tool</title>
     <link rel="icon" href="/favicon.ico" type="image/x-icon" />
     <link rel="apple-touch-icon" href="/favicon_io/apple-touch-icon.png" />
+    <script>
+      // The theme before the first paint, so a dark page does not flash light.
+      // useTheme takes over once the app loads; this only has to be right.
+      try {
+        const theme = JSON.parse(localStorage.getItem('multi-llm.theme') ?? '"system"');
+        if (theme === 'dark' || (theme !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        }
+      } catch {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

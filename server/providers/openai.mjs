@@ -107,6 +107,7 @@ function readDelta(delta) {
  *                     take the request, and what to add to it
  * @param includeUsage whether to ask for token counts with stream_options
  * @param extraBody    anything else the provider wants on every request
+ * @param maxTokensField what the API calls the cap on an answer's length
  */
 export function openAiCompatible({
   id,
@@ -118,6 +119,7 @@ export function openAiCompatible({
   reasoning,
   includeUsage = true,
   extraBody = {},
+  maxTokensField = 'max_tokens',
   fallbackModels,
 }) {
   const baseUrl = () => (process.env[baseUrlEnv] ?? defaultBaseUrl).replace(/\/$/, '');
@@ -158,7 +160,7 @@ export function openAiCompatible({
       return sortModels([...described.keys()]).map((name) => ({ name, ...described.get(name) }));
     },
 
-    async *chat({ key, model, messages, system, think, thinking, signal }) {
+    async *chat({ key, model, messages, system, think, thinking, settings = {}, signal }) {
       // Unlike Anthropic, the system prompt is just a message with a role.
       const body = {
         model,
@@ -167,6 +169,8 @@ export function openAiCompatible({
         // Without this OpenAI's final frame carries no token counts.
         ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
         ...(think && thinking && reasoning ? reasoning.body : {}),
+        ...(settings.temperature !== undefined ? { temperature: settings.temperature } : {}),
+        ...(settings.maxTokens !== undefined ? { [maxTokensField]: settings.maxTokens } : {}),
         ...extraBody,
       };
 
@@ -220,7 +224,7 @@ export function openAiCompatible({
 }
 
 /** OpenRouter's prices are strings of USD per token; a negative one means it varies. */
-function readPricing(entry) {
+export function readPricing(entry) {
   const prompt = Number(entry.pricing?.prompt);
   const completion = Number(entry.pricing?.completion);
   return prompt >= 0 && completion >= 0 ? { prompt, completion } : null;
@@ -232,6 +236,8 @@ export const openai = openAiCompatible({
   defaultBaseUrl: 'https://api.openai.com/v1',
   baseUrlEnv: 'OPENAI_BASE_URL',
   isChat: byName(/^(gpt-|o[134]-|o[134]$|chatgpt-)/i),
+  // max_tokens is deprecated there, and its reasoning models refuse it.
+  maxTokensField: 'max_completion_tokens',
   fallbackModels: ['gpt-4o', 'gpt-4o-mini'],
 });
 

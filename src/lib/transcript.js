@@ -53,6 +53,8 @@ export function totalTokens(turns) {
       if (typeof cost === 'number' || total.costUsd !== undefined) {
         next.costUsd = (total.costUsd ?? 0) + (typeof cost === 'number' ? cost : 0);
       }
+      // One estimate in it makes the whole total one.
+      if (total.costEstimated || turn.usage?.costEstimated) next.costEstimated = true;
       return next;
     },
     { promptTokens: 0, completionTokens: 0 },

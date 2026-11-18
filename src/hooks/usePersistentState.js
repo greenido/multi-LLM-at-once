@@ -11,10 +11,14 @@ export function usePersistentState(key, fallback, accept = () => true) {
     const stored = load(key, fallback);
     return accept(stored) ? stored : fallback;
   });
+  // Takes a value or, like setState, a function of the current one.
   const update = useCallback(
     (next) => {
-      setValue(next);
-      save(key, next);
+      setValue((current) => {
+        const value = typeof next === 'function' ? next(current) : next;
+        save(key, value);
+        return value;
+      });
     },
     [key],
   );
