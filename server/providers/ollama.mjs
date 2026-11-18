@@ -4,8 +4,10 @@
  *
  * It is the one provider that needs no API key, and the one that can be absent
  * entirely — a user with only cloud keys never starts it.
+ *
+ * Plain fetch, like every other adapter: the three routes used here are small,
+ * and the answer streams as newline-delimited JSON.
  */
-import { Ollama } from 'ollama';
 import { stoppedEarly, thinkTags } from './shared.mjs';
 
 const LABEL = 'Ollama';
@@ -30,6 +32,53 @@ export function describeOllamaError(error, model) {
   return message;
 }
 
+/** POST a JSON body to Ollama; a non-2xx answer throws with Ollama's own message. */
+async function post(path, body, signal) {
+  const response = await fetch(`${ollamaUrl()}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    let message;
+    try {
+      message = JSON.parse(text).error;
+    } catch {
+      message = text.slice(0, 200);
+    }
+    throw new Error(message || `Ollama returned HTTP ${response.status}.`);
+  }
+  return response;
+}
+
+/** Each line of a newline-delimited JSON body, parsed. */
+async function* ndjson(body) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const parse = (line) => (line.trim() ? JSON.parse(line) : null);
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let newline = buffer.indexOf('\n');
+      while (newline !== -1) {
+        const part = parse(buffer.slice(0, newline));
+        if (part) yield part;
+        buffer = buffer.slice(newline + 1);
+        newline = buffer.indexOf('\n');
+      }
+    }
+    const part = parse(buffer);
+    if (part) yield part;
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+}
+
 //
 // What a model can do — whether it can be asked to think — is fixed for a given
 // pull, so it is asked for once rather than before every question. The cache
@@ -39,11 +88,11 @@ export function describeOllamaError(error, model) {
 const digests = new Map();
 const capabilities = new Map();
 
-function capabilitiesOf(client, model) {
+function capabilitiesOf(model) {
   const key = `${model}@${digests.get(model) ?? ''}`;
   if (!capabilities.has(key)) {
-    const asked = client.show({ model }).then(
-      (shown) => shown.capabilities ?? [],
+    const asked = post('/api/show', { model }).then(
+      async (response) => (await response.json()).capabilities ?? [],
       (error) => {
         // A failure is not an answer: the next question asks again.
         capabilities.delete(key);
@@ -66,43 +115,44 @@ export const ollama = {
 
   async listModels() {
     try {
-      const { models = [] } = await new Ollama({ host: ollamaUrl() }).list();
+      const response = await fetch(`${ollamaUrl()}/api/tags`);
+      if (!response.ok) throw new Error(`Ollama returned HTTP ${response.status}.`);
+      const { models = [] } = await response.json();
       for (const { name, digest } of models) if (name) digests.set(name, digest);
       return models
         .map((entry) => entry.name)
         .filter(Boolean)
         .sort((a, b) => a.localeCompare(b));
     } catch (error) {
-      throw new Error(describeOllamaError(error));
+      throw new Error(describeOllamaError(error), { cause: error });
     }
   },
 
   async *chat({ model, messages, system, think, signal }) {
-    // A client per request, so aborting this stream leaves other in-flight
-    // requests alone. The client exposes abort() rather than taking a signal,
-    // so the signal is bridged to it.
-    const client = new Ollama({ host: ollamaUrl() });
-    const onAbort = () => client.abort();
-    signal?.addEventListener('abort', onAbort, { once: true });
-
     try {
       // A thinking model thinks by default, and its reasoning arrives apart
       // from the answer. Asked to, though, a model that cannot think fails the
       // request outright, so only one whose capabilities say it can is asked.
-      const canThink = think && (await capabilitiesOf(client, model)).includes('thinking');
+      const canThink = think && (await capabilitiesOf(model)).includes('thinking');
 
-      const stream = await client.chat({
-        model,
-        messages: system ? [{ role: 'system', content: system }, ...messages] : messages,
-        stream: true,
-        ...(canThink ? { think: true } : {}),
-      });
+      const response = await post(
+        '/api/chat',
+        {
+          model,
+          messages: system ? [{ role: 'system', content: system }, ...messages] : messages,
+          stream: true,
+          ...(canThink ? { think: true } : {}),
+        },
+        signal,
+      );
 
       // A model whose template does not set its reasoning apart writes it into
       // the answer, in <think> tags.
       const split = thinkTags();
 
-      for await (const part of stream) {
+      for await (const part of ndjson(response.body)) {
+        // A failure after the stream began arrives as a line of its own.
+        if (part.error) throw new Error(part.error);
         if (part.message?.thinking) yield { reasoning: part.message.thinking };
         if (part.message?.content) yield* split(part.message.content);
         if (part.done) {
@@ -123,16 +173,14 @@ export const ollama = {
         }
       }
     } catch (error) {
-      // An abort arrives here as an ordinary error, but the caller needs to be
-      // able to tell a cancellation apart from a failure.
+      // However the abort surfaced, the caller needs to be able to tell a
+      // cancellation apart from a failure.
       if (signal?.aborted) {
         const aborted = new Error('The request was aborted.');
         aborted.name = 'AbortError';
         throw aborted;
       }
-      throw new Error(describeOllamaError(error, model));
-    } finally {
-      signal?.removeEventListener('abort', onAbort);
+      throw new Error(describeOllamaError(error, model), { cause: error });
     }
   },
 };

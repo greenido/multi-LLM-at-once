@@ -14,7 +14,7 @@
  * Production:  `npm run build && npm start` serves everything from :3000.
  *
  * @author @greenido
- * @see https://github.com/ollama/ollama-js
+ * @see https://github.com/ollama/ollama/blob/main/docs/api.md
  */
 import express from 'express';
 import {

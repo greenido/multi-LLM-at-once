@@ -52,8 +52,8 @@ before(async () => {
     // misbehaves, so a test can point a base URL at one; openai-reasoning
     // answers as a reasoning model would, ollama-tags as one that writes its
     // reasoning into the answer between <think> tags, and gemini-blocked as a
-    // model refusing the prompt outright.
-    const dialect = segment.replace(/-(401|stall|reasoning|tags|blocked)$/, '');
+    // model refusing the prompt outright; ollama-missing has no such model.
+    const dialect = segment.replace(/-(401|stall|reasoning|tags|blocked|missing)$/, '');
     const reasoning = segment.endsWith('-reasoning');
     const tags = segment.endsWith('-tags');
     const blocked = segment.endsWith('-blocked');
@@ -160,6 +160,17 @@ before(async () => {
 
     // Ollama streams newline-delimited JSON rather than SSE, and times itself
     // in nanoseconds on the final line.
+    if (dialect === 'ollama' && segment.endsWith('-missing')) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: `model "${body.model}" not found, try pulling it first` }));
+    }
+    if (dialect === 'ollama' && segment.endsWith('-stall')) {
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+      const frame = `${JSON.stringify({ message: { role: 'assistant', content: 'x' }, done: false })}\n`;
+      const timer = setInterval(() => res.write(frame), 10);
+      res.on('close', () => clearInterval(timer));
+      return;
+    }
     if (dialect === 'ollama') {
       res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
       const line = (value) => `${JSON.stringify({ model: 'test-model', ...value })}\n`;
@@ -752,6 +763,42 @@ describe('when a provider says no', () => {
     process.env.XAI_BASE_URL = 'http://127.0.0.1:1';
     await assert.rejects(xai.listModels(KEY), /Cannot reach Grok \(xAI\)/);
     process.env.XAI_BASE_URL = saved;
+  });
+});
+
+describe('Ollama, when something is wrong', () => {
+  it('says to start it when it is not running', async () => {
+    const saved = process.env.OLLAMA_URL;
+    process.env.OLLAMA_URL = 'http://127.0.0.1:1';
+    try {
+      await assert.rejects(ollama.listModels(), /Cannot reach Ollama at http:\/\/127\.0\.0\.1:1/);
+      await assert.rejects(drain(ollama), /ollama serve/);
+    } finally {
+      process.env.OLLAMA_URL = saved;
+    }
+  });
+
+  it('says how to pull a model it does not have', async () => {
+    await onVariant('OLLAMA_URL', 'missing', async () => {
+      await assert.rejects(drain(ollama, { model: 'nope:7b' }), /Run: ollama pull nope:7b/);
+    });
+  });
+
+  it('reports a cancelled answer as an abort', async () => {
+    await onVariant('OLLAMA_URL', 'stall', async () => {
+      const controller = new AbortController();
+      await assert.rejects(async () => {
+        let chunks = 0;
+        for await (const part of ollama.chat({
+          model: 'test-model',
+          messages: [{ role: 'user', content: 'hi' }],
+          system: null,
+          signal: controller.signal,
+        })) {
+          if (part.text && ++chunks === 2) controller.abort();
+        }
+      }, (error) => error.name === 'AbortError');
+    });
   });
 });
 
