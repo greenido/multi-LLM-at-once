@@ -331,9 +331,12 @@ client cannot name a model that is not actually available.
 Listings are cached per provider: Ollama for 10 seconds, so a model you just
 pulled turns up almost at once, and the cloud catalogues for 5 minutes, since
 they change slowly and their calls are metered. Saving or clearing a key
-invalidates that provider's entry immediately. A listing that throws does not
-empty the picker — the provider's curated fallback list stands in, and the
-error rides along so the UI can say the row may be incomplete.
+invalidates that provider's entry immediately. Requests that need a listing
+at the same moment — four panels on one provider — share one fetch. A listing
+that throws does not empty the picker — the provider's curated fallback list
+stands in, and the error rides along so the UI can say the row may be
+incomplete. A failure is kept for 15 seconds only, so a network blip does not
+hold for the full five minutes.
 
 `GET /api/models` returns `{ models, providers }` — every queryable model,
 and one entry per provider carrying its label, whether it is keyless, whether a
@@ -371,7 +374,7 @@ listing says it can be asked:
 | --- | --- | --- |
 | Anthropic | `thinking: { type: "adaptive", display: "summarized" }`, or a 16,000-token `budget_tokens` | Claude 4.6 and later think adaptively, 4.5 and earlier to a budget — the listing says which |
 | Gemini | `thinkingConfig: { includeThoughts: true }` | those the listing marks `thinking` |
-| Ollama | `think: true` | those whose capabilities include `thinking` — asking one that cannot is an error |
+| Ollama | `think: true` | those whose capabilities include `thinking` — asking one that cannot is an error. Asked once per pulled model, not per question |
 | OpenRouter | `reasoning: { enabled: true }` — medium effort | those that list `reasoning` among their parameters |
 
 Claude Opus 5, Sonnet 5 and Fable think whether asked or not, silently, so
